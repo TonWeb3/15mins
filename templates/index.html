@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Dashboard - Polymarket Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        .font-mono { font-family: 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace; }
+        @media (max-width: 640px) {
+            .text-3xl { font-size: 1.5rem; line-height: 2rem; }
+            .text-5xl { font-size: 2.25rem; line-height: 2.5rem; }
+            .p-8 { padding: 1rem; }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen p-4 sm:p-8" x-data="assistantData()" x-cloak>
+    <div class="max-w-6xl mx-auto">
+        <header class="flex flex-col sm:flex-row justify-between items-center mb-6 sm:mb-8 gap-4">
+            <h1 class="text-2xl sm:text-3xl font-bold text-blue-400" x-text="(data.trading_state?.symbol || 'BTC') + ' ' + (data.trading_state?.window_minutes || 15) + 'm Assistant'"></h1>
+            <div class="flex space-x-2 sm:space-x-4 items-center">
+                <div class="flex items-center space-x-2 text-[10px] sm:text-xs mr-2 sm:mr-4">
+                    <div class="flex items-center" :title="'spot ' + (data.prices?.spot_age_s != null ? data.prices.spot_age_s.toFixed(1) + 's old' : 'no data')">
+                        <div :class="data.prices?.spot_fresh ? 'bg-green-500' : 'bg-red-500 animate-pulse'" class="w-2 h-2 rounded-full mr-1"></div>
+                        <span class="text-gray-400">Spot</span>
+                    </div>
+                    <div class="flex items-center" :title="'book via ' + (data.prices?.book_source || '-') + (data.prices?.book_age_s != null ? ' · last frame ' + data.prices.book_age_s.toFixed(1) + 's ago' : '')">
+                        <div :class="(data.prices?.book_source === 'ws' &amp;&amp; data.prices?.book_fresh) ? 'bg-green-500' : (data.prices?.book_source === 'rest' ? 'bg-yellow-500' : 'bg-red-500')" class="w-2 h-2 rounded-full mr-1"></div>
+                        <span class="text-gray-400">Book</span>
+                    </div>
+                    <div class="flex items-center" :title="'settlement feed ' + (data.prices?.settle_age_s != null ? data.prices.settle_age_s.toFixed(0) + 's old' : 'no data')">
+                        <div :class="data.prices?.settle_fresh ? 'bg-green-500' : 'bg-red-500 animate-pulse'" class="w-2 h-2 rounded-full mr-1"></div>
+                        <span class="text-gray-400">Settle</span>
+                    </div>
+                    <div class="flex items-center" :title="wsConnected ? 'dashboard pushed over WebSocket (every trading tick)' : 'WebSocket down — falling back to 1s polling'">
+                        <div :class="wsConnected ? 'bg-green-500' : 'bg-yellow-500 animate-pulse'" class="w-2 h-2 rounded-full mr-1"></div>
+                        <span class="text-gray-400" x-text="wsConnected ? 'Push' : 'Poll'"></span>
+                    </div>
+                </div>
+                <!-- Loud banner when spot is stale: entries are halted -->
+                <span x-show="data.prices && data.prices.spot_fresh === false"
+                      class="px-2 py-1 rounded text-[9px] sm:text-[10px] font-bold uppercase bg-red-600 text-white animate-pulse">
+                    ⚠ Spot stale — entries halted
+                </span>
+
+                <!-- Realtime balance: label switches with mode (Live vs Paper) -->
+                <div class="flex flex-col items-end leading-tight">
+                    <span class="text-[9px] sm:text-[10px] text-gray-500 uppercase tracking-wider"
+                          x-text="(data.trading_state?.mode === 'live' ? 'Live' : 'Paper') + ' Balance'"></span>
+                    <span class="text-base sm:text-xl font-bold font-mono"
+                          :class="data.trading_state?.mode === 'live' ? 'text-emerald-400' : 'text-yellow-400'"
+                          x-text="'$' + (data.trading_state?.balance != null ? Number(data.trading_state.balance).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '-')"></span>
+                </div>
+
+                <!-- Start / Stop trading -->
+                <button @click="running ? stopBot() : startBot()" :disabled="botBusy"
+                        class="flex items-center gap-1.5 px-3 sm:px-5 py-2 rounded-lg font-bold uppercase text-[10px] sm:text-xs transition disabled:opacity-60 disabled:cursor-not-allowed"
+                        :class="running ? 'bg-red-600 hover:bg-red-500' : 'bg-green-600 hover:bg-green-500'">
+                    <svg x-show="botBusy" class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span x-text="botBusy ? (running ? 'Stopping…' : 'Starting…') : (running ? '■ Stop' : '▶ Start')"></span>
+                </button>
+
+                <!-- Auto-withdraw status (only when enabled) -->
+                <span x-show="data.trading_state?.withdraw?.enabled"
+                      class="px-2 py-1 rounded text-[9px] sm:text-[10px] font-bold uppercase"
+                      :class="data.trading_state?.withdraw?.state === 'ARMED' ? 'bg-gray-700 text-emerald-400' : 'bg-amber-600 text-white'"
+                      x-text="'⤓ ' + (data.trading_state?.withdraw?.state || '')"></span>
+
+                <a href="/settings" class="text-gray-400 hover:text-white transition p-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                </a>
+                <span :class="data.trading_state?.mode === 'paper' ? 'bg-yellow-600' : 'bg-red-600'"
+                      class="px-3 py-1 rounded-full font-bold uppercase text-[10px] sm:text-xs" x-text="data.trading_state?.mode"></span>
+                <span class="bg-gray-800 px-3 py-1 rounded text-gray-400 text-[10px] sm:text-xs" x-text="'Updated: ' + lastUpdate"></span>
+            </div>
+        </header>
+
+        <!-- Market Summary -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
+            <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg border-l-4 border-blue-500">
+                <p class="text-gray-400 text-xs sm:text-sm uppercase">BTC Binance Spot</p>
+                <h2 class="text-2xl sm:text-3xl font-mono" x-text="'$' + (data.prices?.spot?.toLocaleString() || '-')"></h2>
+            </div>
+            <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg border-l-4 border-green-500 group relative">
+                <div class="flex justify-between items-start">
+                    <p class="text-gray-400 text-xs sm:text-sm uppercase">Polymarket Chainlink</p>
+                    <div class="cursor-help text-gray-500 hover:text-white transition">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                    </div>
+                </div>
+                <h2 class="text-2xl sm:text-3xl font-mono" x-text="'$' + (data.prices?.chainlink?.toLocaleString() || '-')"></h2>
+                <p class="text-[10px] mt-1 uppercase tracking-tighter">
+                    <span class="text-gray-500">Close src: </span>
+                    <span :class="data.prices?.chainlink_source === 'Polymarket WS' ? 'text-green-400' : 'text-yellow-400'"
+                          x-text="data.prices?.chainlink_source || '-'"></span>
+                </p>
+                <p class="text-[10px] mt-0.5 uppercase tracking-tighter">
+                    <span class="text-gray-500">Open (strike): </span>
+                    <span class="text-gray-300 font-mono" x-text="data.prices?.window_open != null ? ('$' + data.prices.window_open.toLocaleString()) : '— not marked (window not traded)'"></span>
+                    <span class="text-green-400" x-show="data.prices?.window_open != null"> (Price to Beat)</span>
+                </p>
+                <!-- WHY there is no open price. Without this, "a window we skipped" and
+                     "the price feed has been dead for hours" look identical. -->
+                <p x-show="data.prices?.window_open == null && data.signal?.strike_status"
+                   class="text-[10px] mt-1 text-amber-400 normal-case leading-snug"
+                   x-text="'⚠ ' + (data.signal?.strike_status || '')"></p>
+                <!-- Tooltip -->
+                <div class="absolute z-10 hidden group-hover:block bg-black text-white text-[10px] p-2 rounded shadow-xl border border-gray-700 w-56 -bottom-24 left-0">
+                    Settlement price used to resolve the market — sourced from Polymarket's WS feed (falls back to Chainlink RPC WS/REST). Win/loss compares this CLOSE vs the marked OPEN. Green = Polymarket WS; yellow = a fallback source.
+                </div>
+            </div>
+            <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg border-l-4 border-purple-500 sm:col-span-2 lg:col-span-1">
+                <p class="text-gray-400 text-xs sm:text-sm uppercase" x-text="'Time Remaining (' + (data.analysis?.decision?.phase || '-') + ')'"></p>
+                <h2 class="text-2xl sm:text-3xl font-mono" x-text="formatTime(data.timing?.remainingMinutes)"></h2>
+            </div>
+        </div>
+
+        <!-- Signal: which side of the open spot is on -->
+        <div class="bg-gray-800 p-6 sm:p-8 rounded-lg shadow-lg mb-6 sm:mb-8 text-center border-t-2 border-blue-600 overflow-hidden">
+            <p class="text-gray-400 uppercase tracking-widest mb-4 text-xs sm:text-sm">Spot vs the Open</p>
+            <div class="flex flex-col sm:flex-row justify-center items-center space-y-4 sm:space-y-0 sm:space-x-12">
+                <div class="text-center order-2 sm:order-1">
+                    <p class="font-mono text-xl sm:text-2xl text-gray-300" x-text="data.prices?.window_open != null ? '$' + Math.round(data.prices.window_open).toLocaleString() : '—'"></p>
+                    <p class="text-[10px] sm:text-xs text-gray-500">OPEN (PRICE TO BEAT)</p>
+                </div>
+                <div class="text-center order-1 sm:order-2">
+                    <div class="text-3xl sm:text-5xl font-black mb-1 sm:mb-2"
+                         :class="data.signal?.side === 'UP' ? 'text-green-500' : (data.signal?.side === 'DOWN' ? 'text-red-500' : 'text-gray-600')"
+                         x-text="data.signal?.side === 'UP' ? 'ABOVE ↑ BUY UP' : (data.signal?.side === 'DOWN' ? 'BELOW ↓ BUY DOWN' : 'AT THE OPEN')"></div>
+                    <p class="text-[10px] sm:text-xs uppercase text-gray-400 font-bold" x-text="data.analysis?.decision?.reason || ''"></p>
+                </div>
+                <div class="text-center order-3">
+                    <p class="font-mono text-xl sm:text-2xl"
+                       :class="data.prices?.distance > 0 ? 'text-green-400' : (data.prices?.distance < 0 ? 'text-red-400' : 'text-gray-400')"
+                       x-text="data.prices?.distance != null ? ((data.prices.distance >= 0 ? '+$' : '-$') + Math.abs(data.prices.distance).toFixed(2)) : '—'"></p>
+                    <p class="text-[10px] sm:text-xs text-gray-500">DISTANCE FROM OPEN</p>
+                </div>
+            </div>
+            <p class="text-[10px] text-gray-600 mt-4 italic"
+               x-show="data.signal?.held_side"
+               x-text="'Holding ' + (data.signal?.held_side || '') + ' — a cross of the open sells it and reverses'"></p>
+        </div>
+
+        <!-- Window risk budget + odds -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-8 mb-6 sm:mb-8">
+            <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg border-l-4"
+                 :class="data.window_risk?.can_enter ? 'border-emerald-500' : 'border-amber-500'">
+                <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
+                    <h3 class="text-lg sm:text-xl font-bold">This Window's Risk</h3>
+                    <span class="px-2 py-1 rounded text-[9px] font-bold uppercase"
+                          :class="data.window_risk?.can_enter ? 'bg-emerald-700 text-white' : 'bg-amber-600 text-white'"
+                          x-text="data.window_risk?.can_enter ? (data.window_risk?.blocked_side ? (data.window_risk.blocked_side + ' blocked (SL)') : 'Trading') : (data.window_risk?.block_reason || 'closed')"></span>
+                </div>
+                <div class="space-y-3">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-400">Balance recorded at open</span>
+                        <span class="font-mono text-gray-200" x-text="data.window_risk?.balance_at_start != null ? '$' + data.window_risk.balance_at_start.toFixed(2) : '-'"></span>
+                    </div>
+                    <div class="flex justify-between text-sm">
+                        <span class="text-gray-400" x-text="'Risk per trade (' + (data.trading_state?.risk?.value ?? '-') + (data.trading_state?.risk?.type === 'fixed' ? ' $)' : '%)')"></span>
+                        <span class="font-mono text-blue-300 font-bold" x-text="data.window_risk?.risk_per_trade != null ? '$' + data.window_risk.risk_per_trade.toFixed(2) : '-'"></span>
+                    </div>
+                    <div class="flex justify-between text-sm border-t border-gray-700 pt-3">
+                        <span class="text-gray-400">Window P/L</span>
+                        <span class="font-mono font-bold"
+                              :class="data.window_risk?.realized_pl > 0 ? 'text-green-400' : (data.window_risk?.realized_pl < 0 ? 'text-red-400' : 'text-gray-400')"
+                              x-text="data.window_risk?.realized_pl != null ? ((data.window_risk.realized_pl >= 0 ? '+$' : '-$') + Math.abs(data.window_risk.realized_pl).toFixed(2)) : '-'"></span>
+                    </div>
+                    <div class="flex justify-between text-xs">
+                        <span class="text-gray-500">Loss budget left</span>
+                        <span class="font-mono text-gray-300">
+                            <span x-text="data.window_risk?.loss_left != null ? '$' + data.window_risk.loss_left.toFixed(2) : '-'"></span>
+                            <span class="text-gray-600" x-text="data.window_risk?.loss_budget ? (' of $' + data.window_risk.loss_budget.toFixed(2)) : ''"></span>
+                        </span>
+                    </div>
+                    <div class="flex justify-between text-xs">
+                        <span class="text-gray-500">Closed this window</span>
+                        <span class="font-mono">
+                            <span class="text-green-400" x-text="(data.window_risk?.wins ?? 0) + 'W'"></span>
+                            <span class="text-gray-600"> / </span>
+                            <span class="text-red-400" x-text="(data.window_risk?.losses ?? 0) + 'L'"></span>
+                        </span>
+                    </div>
+                    <div class="flex justify-between text-xs">
+                        <span class="text-gray-500">TP / SL</span>
+                        <span class="font-mono text-gray-300"
+                              x-text="data.trading_state?.tp_sl?.enabled ? ('+' + data.trading_state.tp_sl.take_profit_pct + '% / -' + data.trading_state.tp_sl.stop_loss_pct + '% of stake') : 'off'"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 p-4 sm:p-6 rounded-lg shadow-lg">
+                <h3 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Polymarket Odds</h3>
+                <div class="space-y-4">
+                    <div class="flex justify-between items-center text-sm sm:text-base">
+                        <span class="text-green-400 font-bold uppercase">Up (YES)</span>
+                        <span class="text-xl sm:text-2xl font-mono text-green-400" x-text="data.prices?.poly_up ? (data.prices.poly_up * 100).toFixed(0) + '¢' : '-'"></span>
+                    </div>
+                    <div class="flex justify-between items-center text-sm sm:text-base">
+                        <span class="text-red-400 font-bold uppercase">Down (NO)</span>
+                        <span class="text-xl sm:text-2xl font-mono text-red-400" x-text="data.prices?.poly_down ? (data.prices.poly_down * 100).toFixed(0) + '¢' : '-'"></span>
+                    </div>
+                    <div class="flex justify-between border-t border-gray-700 pt-2 text-xs">
+                        <span class="text-gray-500">You'd pay (full stake)</span>
+                        <span class="font-mono text-gray-300">
+                            <span x-text="data.prices?.fill_up ? 'UP ' + (data.prices.fill_up * 100).toFixed(1) + '¢' : 'UP —'"></span>
+                            <span class="text-gray-600"> · </span>
+                            <span x-text="data.prices?.fill_down ? 'DOWN ' + (data.prices.fill_down * 100).toFixed(1) + '¢' : 'DOWN —'"></span>
+                        </span>
+                    </div>
+                    <p class="text-[10px] text-gray-600 italic pt-1">The odds are the cost of the trade, not the trigger for it — entries come only from which side of the open spot is on.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden mb-8">
+            <div class="flex bg-gray-700 overflow-x-auto">
+                <button @click="tab = 'active'" :class="tab === 'active' ? 'bg-gray-800 text-blue-400' : 'text-gray-400 hover:text-white'" class="px-4 sm:px-6 py-3 font-bold uppercase text-[10px] sm:text-sm transition flex-shrink-0">Active Trades</button>
+                <button @click="tab = 'history'" :class="tab === 'history' ? 'bg-gray-800 text-blue-400' : 'text-gray-400 hover:text-white'" class="px-4 sm:px-6 py-3 font-bold uppercase text-[10px] sm:text-sm transition flex-shrink-0">Closed Trades</button>
+                <button @click="tab = 'logs'" :class="tab === 'logs' ? 'bg-gray-800 text-blue-400' : 'text-gray-400 hover:text-white'" class="px-4 sm:px-6 py-3 font-bold uppercase text-[10px] sm:text-sm transition flex-shrink-0">Console Log</button>
+            </div>
+
+            <div class="p-4 sm:p-6">
+                <!-- Active Trades -->
+                <div x-show="tab === 'active'">
+                    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-2">
+                        <h3 class="text-lg sm:text-xl font-bold">Equity</h3>
+                        <div class="text-right">
+                            <span class="text-xl sm:text-2xl font-bold text-green-500"
+                                  x-text="'$' + ((data.trading_state?.equity ?? data.trading_state?.balance) != null ? (data.trading_state?.equity ?? data.trading_state?.balance).toLocaleString(undefined, {maximumFractionDigits: 2}) : '1,000')"></span>
+                            <p class="text-[10px] text-gray-500 uppercase tracking-tighter">
+                                <span x-text="'Cash $' + (data.trading_state?.balance != null ? data.trading_state.balance.toLocaleString(undefined, {maximumFractionDigits: 2}) : '-')"></span>
+                                <span x-show="data.trading_state?.open_value > 0" x-text="' + Open $' + (data.trading_state?.open_value != null ? data.trading_state.open_value.toLocaleString(undefined, {maximumFractionDigits: 2}) : '-')"></span>
+                            </p>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto -mx-4 sm:mx-0">
+                        <table class="w-full text-left min-w-[500px] sm:min-w-0">
+                            <thead>
+                                <tr class="text-gray-500 text-xs uppercase tracking-wider">
+                                    <th class="px-4 py-2">Market</th>
+                                    <th class="px-4 py-2">Side</th>
+                                    <th class="px-4 py-2">Entry</th>
+                                    <th class="px-4 py-2">Shares</th>
+                                    <th class="px-4 py-2">Opened by</th>
+                                    <th class="px-4 py-2">Unreal. P/L</th>
+                                    <th class="px-4 py-2">Status</th>
+                                    <th class="px-4 py-2 text-right">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody class="text-[11px] sm:text-sm">
+                                <template x-for="trade in data.trading_state?.active_trades" :key="trade.market_id">
+                                    <tr class="border-t border-gray-700 hover:bg-gray-700/30 transition">
+                                        <td class="px-4 py-3 truncate max-w-[150px] sm:max-w-[200px]" x-text="trade.market_slug"></td>
+                                        <td class="px-4 py-3 font-bold" :class="trade.side === 'UP' ? 'text-green-400' : 'text-red-400'" x-text="trade.side"></td>
+                                        <td class="px-4 py-3 font-mono" x-text="(trade.entry_price * 100).toFixed(0) + '¢'"></td>
+                                        <td class="px-4 py-3 font-mono" x-text="trade.shares.toFixed(2)"></td>
+                                        <td class="px-4 py-3 font-mono font-bold" :class="trade.open_reason === 'reverse_entry' ? 'text-orange-400' : 'text-blue-400'" x-text="trade.open_reason === 'reverse_entry' ? 'REVERSE' : 'CROSS'"></td>
+                                        <td class="px-4 py-3 font-mono font-bold"
+                                            :class="trade.unrealized_pl == null ? 'text-gray-500' : (trade.unrealized_pl >= 0 ? 'text-green-400' : 'text-red-400')"
+                                            x-text="trade.unrealized_pl == null ? '—' : ((trade.unrealized_pl >= 0 ? '+$' : '-$') + Math.abs(trade.unrealized_pl).toFixed(2))"></td>
+                                        <td class="px-4 py-3 text-yellow-500 font-bold" x-text="trade.status"></td>
+                                        <td class="px-4 py-3 text-right">
+                                            <button @click="closeTrade()" :disabled="closingTrade"
+                                                    class="px-3 py-1.5 rounded font-bold uppercase text-[10px] tracking-wider transition bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed">
+                                                <span x-text="closingTrade ? 'Closing…' : 'Close Trade'"></span>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </template>
+                                <tr x-show="!data.trading_state?.active_trades?.length">
+                                    <td colspan="8" class="py-6 text-center text-gray-600 italic text-xs">No active trades found. Looking for edge...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+
+                <!-- Closed Trades -->
+                <div x-show="tab === 'history'">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-lg sm:text-xl font-bold">Trade History</h3>
+                        <a href="/history.csv" download
+                           class="flex items-center gap-1.5 px-3 py-2 rounded-lg font-bold uppercase text-[10px] sm:text-xs transition bg-blue-600 hover:bg-blue-500"
+                           :class="tradeHistory.length ? '' : 'opacity-50 pointer-events-none'">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5 5 5-5M12 15V3" />
+                            </svg>
+                            <span>Download CSV</span>
+                        </a>
+                    </div>
+                    <div class="overflow-x-auto -mx-4 sm:mx-0">
+                        <table class="w-full text-left min-w-[500px] sm:min-w-0">
+                            <thead>
+                                <tr class="text-gray-500 text-xs uppercase tracking-wider">
+                                    <th class="px-4 py-2">Market</th>
+                                    <th class="px-4 py-2">Side</th>
+                                    <th class="px-4 py-2">Entry Time</th>
+                                    <th class="px-4 py-2">Close Time</th>
+                                    <th class="px-4 py-2">Entry</th>
+                                    <th class="px-4 py-2">Opened by</th>
+                                    <th class="px-4 py-2">Exit</th>
+                                    <th class="px-4 py-2" title="Where the market went, and whether that matched this trade's side. Independent of the P/L — an early exit can lose money on a side the market later favoured.">Market Open→Close</th>
+                                    <th class="px-4 py-2 text-right">P/L</th>
+                                </tr>
+                            </thead>
+                            <tbody class="text-[11px] sm:text-sm">
+                                <template x-for="trade in tradeHistory" :key="trade.entry_time">
+                                    <tr class="border-t border-gray-700 hover:bg-gray-700/30 transition">
+                                        <td class="px-4 py-3 truncate max-w-[150px] sm:max-w-[200px]" x-text="trade.market_slug"></td>
+                                        <td class="px-4 py-3 font-bold" :class="trade.side === 'UP' ? 'text-green-400' : 'text-red-400'" x-text="trade.side"></td>
+                                        <td class="px-4 py-3 text-gray-400 text-[10px] whitespace-nowrap" x-text="trade.entry_time ? new Date(trade.entry_time).toLocaleString() : '—'"></td>
+                                        <td class="px-4 py-3 text-gray-400 text-[10px] whitespace-nowrap" x-text="trade.exit_time ? new Date(trade.exit_time).toLocaleString() : '—'"></td>
+                                        <td class="px-4 py-3 font-mono" x-text="(trade.entry_price * 100).toFixed(0) + '¢'"></td>
+                                        <td class="px-4 py-3 font-mono font-bold" :class="trade.open_reason === 'reverse_entry' ? 'text-orange-400' : 'text-blue-400'" x-text="trade.open_reason === 'reverse_entry' ? 'REVERSE' : 'CROSS'"></td>
+                                        <td class="px-4 py-3 font-mono font-bold"
+                                            :class="trade.exit_reason === 'reverse' ? 'text-orange-400' : (trade.exit_reason === 'take_profit' ? 'text-green-400' : (trade.exit_reason === 'stop_loss' ? 'text-red-400' : ((trade.status === 'VOID' || trade.exit_reason === 'void') ? 'text-gray-500' : 'text-teal-400')))"
+                                            x-text="trade.exit_reason === 'take_profit' ? 'TP' : (trade.exit_reason === 'stop_loss' ? 'SL' : (trade.exit_reason === 'reverse' ? 'REVERSAL' : (trade.exit_reason ? trade.exit_reason.toUpperCase() : (trade.status === 'VOID' ? 'VOID' : 'SETTLED'))))"></td>
+                                        <!-- Where the MARKET went, and whether that matched this side. This is
+                                             separate from the P/L: an early exit can lose money on a side the
+                                             market later favoured, and vice versa. -->
+                                        <td class="px-4 py-3 font-mono text-[10px]"
+                                            :title="trade.market_won == null ? '' : (trade.market_won ? 'the market ended on this side — holding to expiry would have won' : 'the market ended against this side — holding to expiry would have lost')"
+                                            :class="trade.market_won == null ? 'text-gray-500' : (trade.market_won ? 'text-green-400' : 'text-red-400')"
+                                            x-text="(trade.open_price != null && trade.close_price != null) ? (Math.round(trade.open_price).toLocaleString() + '→' + Math.round(trade.close_price).toLocaleString() + (trade.close_price >= trade.open_price ? ' ↑' : ' ↓') + (trade.market_won == null ? '' : (trade.market_won ? '  side ✓' : '  side ✗'))) : '—'"></td>
+                                        <td class="px-4 py-3 text-right font-bold font-mono" :class="trade.profit_loss > 0 ? 'text-green-400' : 'text-red-400'" x-text="(trade.profit_loss > 0 ? '+$' : '-$') + Math.abs(trade.profit_loss).toFixed(2)"></td>
+                                    </tr>
+                                </template>
+                                <tr x-show="!tradeHistory.length">
+                                    <td colspan="9" class="py-6 text-center text-gray-600 italic text-xs">No closed trades yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Logs -->
+                <div x-show="tab === 'logs'">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-lg sm:text-xl font-bold">System Events</h3>
+                        <div class="flex gap-2">
+                            <a href="/logs.txt" download class="text-[10px] sm:text-xs text-blue-300 hover:text-white uppercase font-bold bg-blue-700 hover:bg-blue-600 px-2 py-1 rounded">Download</a>
+                            <button @click="logs = []" class="text-[10px] sm:text-xs text-gray-500 hover:text-white uppercase font-bold bg-gray-700 px-2 py-1 rounded">Clear</button>
+                        </div>
+                    </div>
+                    <div class="bg-black rounded p-3 sm:p-4 h-64 sm:h-80 overflow-y-auto font-mono text-[10px] sm:text-xs leading-relaxed border border-gray-700">
+                        <template x-for="log in logs" :key="log">
+                            <div class="mb-1 border-b border-gray-900 pb-1" :class="log.includes('WIN') ? 'text-green-400' : (log.includes('LOSS') ? 'text-red-400' : 'text-gray-400')">
+                                <span x-text="log"></span>
+                            </div>
+                        </template>
+                        <div x-show="!logs.length" class="text-gray-700 italic">Listening for system events...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function assistantData() {
+            return {
+                data: {},
+                lastUpdate: '-',
+                tab: 'active',
+                logs: [],
+                tradeHistory: [],
+                running: false,
+                botBusy: false,
+                closingTrade: false,
+                suppressSyncUntil: 0,
+                ws: null,
+                wsConnected: false,
+                pollTimer: null,
+                init() {
+                    this.connectWs();
+                    // History is fetched on demand (only when that tab is open), so it
+                    // still needs a light timer — but only while the tab is showing.
+                    setInterval(() => { if (this.tab === 'history') this.refreshHistory(); }, 2000);
+                },
+
+                // ── Live updates over WebSocket ──────────────────────────────────
+                // The server pushes every trading tick (500ms), so the dashboard moves at
+                // the speed the bot actually thinks instead of the old 1s poll. If the
+                // socket cannot be established (proxy, old deployment) we fall back to
+                // polling /api/latest so the page still works.
+                connectWs() {
+                    let url;
+                    try {
+                        url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+                        this.ws = new WebSocket(url);
+                    } catch (e) { this.startPolling(); return; }
+
+                    this.ws.onopen = () => {
+                        this.wsConnected = true;
+                        this.stopPolling();
+                    };
+                    this.ws.onmessage = (ev) => {
+                        try {
+                            const d = JSON.parse(ev.data);
+                            if (d.latest) this.applyLatest(d.latest);
+                            if (d.logs) this.logs = d.logs.slice().reverse();
+                        } catch (e) {}
+                    };
+                    this.ws.onclose = () => {
+                        this.wsConnected = false;
+                        // Poll while disconnected so the page is never frozen, and keep
+                        // trying the socket — the server may just be restarting.
+                        this.startPolling();
+                        setTimeout(() => this.connectWs(), 3000);
+                    };
+                    this.ws.onerror = () => { try { this.ws.close(); } catch (e) {} };
+                },
+                startPolling() {
+                    if (this.pollTimer) return;
+                    this.refresh();
+                    this.pollTimer = setInterval(() => { this.refresh(); this.refreshLogs(); }, 1000);
+                },
+                stopPolling() {
+                    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+                },
+                applyLatest(latest) {
+                    this.data = latest;
+                    this.lastUpdate = new Date().toLocaleTimeString();
+                    // Keep the Start/Stop button in sync with the server, but not while a
+                    // click is in flight or just after one (the server's flag lags ~1s).
+                    if (!this.botBusy && Date.now() > this.suppressSyncUntil && this.data.trading_state?.running != null) {
+                        this.running = !!this.data.trading_state.running;
+                    }
+                },
+                async refreshHistory() {
+                    try {
+                        const hRes = await fetch('/history');
+                        this.tradeHistory = (await hRes.json()).reverse();
+                    } catch (e) {}
+                },
+                // Fallback transport, used only while the WebSocket is down.
+                async refresh() {
+                    try {
+                        const response = await fetch('/api/latest');
+                        this.applyLatest(await response.json());
+                        if (this.tab === 'history') await this.refreshHistory();
+                    } catch (e) {
+                        console.error("Refresh failed", e);
+                    }
+                },
+                async startBot() {
+                    if (this.botBusy) return;
+                    this.botBusy = true; this.running = true;
+                    this.suppressSyncUntil = Date.now() + 3000;
+                    try { const r = await fetch('/api/start', { method: 'POST' }); this.running = !!(await r.json()).running; }
+                    catch (e) { this.running = false; }
+                    this.suppressSyncUntil = Date.now() + 3000; this.botBusy = false;
+                },
+                async stopBot() {
+                    if (this.botBusy) return;
+                    this.botBusy = true; this.running = false;
+                    this.suppressSyncUntil = Date.now() + 3000;
+                    try { const r = await fetch('/api/stop', { method: 'POST' }); this.running = !!(await r.json()).running; }
+                    catch (e) { this.running = true; }
+                    this.suppressSyncUntil = Date.now() + 3000; this.botBusy = false;
+                },
+                async closeTrade() {
+                    if (this.closingTrade) return;
+                    if (!confirm('Close the open position now at the current bid? No new trade will open until the next 15m market.')) return;
+                    this.closingTrade = true;
+                    try {
+                        const r = await fetch('/api/close-trade', { method: 'POST' });
+                        const d = await r.json();
+                        if (!d.ok) alert('Could not close: ' + (d.error || 'unknown'));
+                        await this.refresh();
+                    } catch (e) {
+                        alert('Close request failed');
+                    }
+                    this.closingTrade = false;
+                },
+                // Fallback only — logs arrive on the socket with every push.
+                async refreshLogs() {
+                    if (this.tab !== 'logs' || this.wsConnected) return;
+                    try {
+                        const response = await fetch('/api/logs');
+                        const logs = await response.json();
+                        this.logs = logs.reverse();
+                    } catch (e) {}
+                },
+                formatTime(mins) {
+                    if (!mins && mins !== 0) return '--:--';
+                    const totalSecs = Math.max(0, Math.floor(mins * 60));
+                    const m = Math.floor(totalSecs / 60);
+                    const s = totalSecs % 60;
+                    return m.toString().padStart(2, '0') + ':' + s.toString().padStart(2, '0');
+                }
+            }
+        }
+    </script>
+</body>
+</html>

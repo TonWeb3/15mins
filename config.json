@@ -1,0 +1,59 @@
+{
+  "mode": "paper",
+  "paper_balance_usd": 1000,
+  "private_key": "",
+  "relayer": {
+    "api_key": ""
+  },
+  "capital_extractor": {
+    "enabled": false,
+    "trigger_balance": 2000,
+    "withdraw_amount": 1000,
+    "withdraw_address": "",
+    "auto_resume_after_withdrawal": true,
+    "resume_after": "submitted"
+  },
+  "polymarket": {
+    "gamma_base_url": "https://gamma-api.polymarket.com",
+    "clob_base_url": "https://clob.polymarket.com",
+    "live_ws_url": "wss://ws-live-data.polymarket.com",
+    "series_id": "10192",
+    "series_slug": "btc-up-or-down-15m",
+    "auto_select_latest": true,
+    "up_label": "Up",
+    "down_label": "Down"
+  },
+  "trading": {
+    "symbol": "BTCUSDT",
+    "binance_base_url": "https://api.binance.com",
+    "candle_window_minutes": 15,
+    "poll_interval_ms": 500,
+    "risk_type": "percent",
+    "risk_value": 10,
+    "max_spot_age_s": 5,
+    "max_book_age_s": 15,
+    "max_settle_price_age_s": 30,
+    "auto_redeem": true
+  },
+  "entry": {
+    "min_move_usd": 5,
+    "min_book_liquidity_usd": 20,
+    "min_seconds_left": 20
+  },
+  "window_risk": {
+    "max_loss_pct": 30,
+    "max_win_pct": 30,
+    "stop_after_win": true
+  },
+  "tp_sl": {
+    "enabled": true,
+    "take_profit_pct": 30,
+    "stop_loss_pct": 10
+  },
+  "chainlink": {
+    "polygon_rpc_url": "https://polygon.drpc.org",
+    "polygon_wss_url": "wss://polygon-bor-rpc.publicnode.com",
+    "btc_usd_aggregator": "0xc907E116054Ad103354f2D350FD2514433D57F6f",
+    "alchemy_api_key": "DfkvQ854X-Kg4-ytU2sG0"
+  }
+}
