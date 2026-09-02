@@ -1,100 +1,75 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Entry rule — the LEVEL, not an event.
+#  Latency-arb entry engine.
 #
-#      price above the open  ->  hold UP    (buy UP if we don't already hold UP)
-#      price below the open  ->  hold DOWN  (buy DOWN if we don't already hold DOWN)
-#      holding the wrong one ->  close it and open the other (reversal)
+#  Backtest verdict: the model has NO predictive edge over the trivial "is spot
+#  already above the 15m open?" baseline — that signal is fully priced by the
+#  market. The only edge left is LATENCY: act on a Binance spot move before
+#  Polymarket's thin book reprices.
 #
-#  It is deliberately stated as a level rather than a "cross". A cross is an EVENT
-#  between two ticks, so it is missed whenever the tick that would have seen it is
-#  lost — a slow poll, a stalled feed, a restart mid-window — and once missed the bot
-#  sits flat with the signal plainly telling it what to hold. Comparing the level every
-#  tick cannot be missed: whatever side price is on, that is the side we should be on.
-#
-#  After a STOP-LOSS the side that lost is BLOCKED, so the bot cannot immediately buy
-#  back the same losing direction tick after tick. The block clears as soon as price is
-#  on the other side of the open, which is what "wait for the opposite signal" means.
-#
-#  A take-profit is handled by the window budget (bot/risk.py), not here: it stops the
-#  window entirely.
+#  The decision is purely a fast fair probability (from Binance spot) vs the
+#  market's implied price. Enter when the gap (expected value) is large enough
+#  that the book looks stale. RSI and Heiken-Ashi survive only as veto filters.
 # ─────────────────────────────────────────────────────────────────────────────
 
-
-def _no_trade(reason: str, side=None, distance=None) -> Dict[str, Any]:
-    # Carry the side/distance even on a no-trade so every tick can be logged.
-    return {"action": "NO_TRADE", "side": side, "phase": "LEVEL", "strength": "LEVEL",
-            "reason": reason, "distance": distance}
+EXHAUSTION_BARS = 6  # a Heiken-Ashi streak this long is over-extended → veto chasing it
 
 
-def signal_side(spot: Optional[float], strike: Optional[float],
-                min_move: float = 0.0) -> Optional[str]:
-    """Which side of the open price is on, or None while it is within `min_move` of it.
+def _no_ev(reason: str) -> Dict[str, Any]:
+    return {"action": "NO_TRADE", "side": None, "phase": "EV", "strength": "EV", "reason": reason}
 
-    The dead band is not a filter on conviction — it is there because ON the open the side
-    is a coin flip priced with the window's widest spread, and flipping the position costs
-    a full round trip (~7% of stake) every time. Inside the band there is no side, so a
-    held position is simply kept.
+
+def decide_ev(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """EV gate: fair probability (Binance) vs market ask price (Polymarket).
+
+    EV_side = p_side - ask_price_side. A positive EV beyond `evThreshold` means the
+    book is underpricing the side our fast feed already favours — the latency edge.
+    RSI / Heiken-Ashi are veto filters only; they do NOT distort the probability.
+    Position sizing (percent/fixed of balance) is handled by the caller.
     """
-    if not spot or not strike or spot <= 0 or strike <= 0:
-        return None
-    diff = spot - strike
-    if abs(diff) <= max(0.0, float(min_move or 0.0)):
-        return None
-    return "UP" if diff > 0 else "DOWN"
+    p_up = inputs.get("mcProbUp")
+    price_up = inputs.get("priceUp")     # ask (buy) price for the UP share, 0..1
+    price_down = inputs.get("priceDown") # ask (buy) price for the DOWN share, 0..1
 
+    if p_up is None:
+        return _no_ev("missing_model_data")
+    if price_up is None or price_down is None:
+        return _no_ev("missing_prices")
 
-def decide_side(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """Entry / reverse decision from where price sits relative to the window's open.
+    p_down = 1.0 - p_up
+    ev_up = p_up - price_up
+    ev_down = p_down - price_down
 
-    Returns action:
-      ENTER    — flat, and price is on a side we're allowed to take.
-      REVERSE  — holding the opposite side: sell it and buy this one.
-      NO_TRADE — with the reason, which is written to signals.csv every tick.
-    """
-    spot = inputs.get("spot")
-    strike = inputs.get("strike")
-    min_move = inputs.get("minMove", 0.0)
-    held = inputs.get("heldSide")
-    blocked = inputs.get("blockedSide")     # side that just hit a stop-loss, if any
-    seconds_left = inputs.get("secondsLeft")
-    min_seconds_left = inputs.get("minSecondsLeft", 20.0)
+    side = "UP" if ev_up >= ev_down else "DOWN"
+    p = p_up if side == "UP" else p_down
+    price = price_up if side == "UP" else price_down
+    ev = ev_up if side == "UP" else ev_down
 
-    if strike is None:
-        return _no_trade("no_strike_this_window", None, None)
-    if spot is None:
-        return _no_trade("no_spot", None, None)
+    min_prob = inputs.get("minProb", 0.55)
+    ev_threshold = inputs.get("evThreshold", 0.04)
 
-    side = signal_side(spot, strike, min_move)
-    distance = spot - strike
+    # ── VETO filters — never chase a stretched move or trade into RSI extremes ──
+    if side == "UP" and inputs.get("haExhaustedGreen"):
+        return _no_ev("ha_exhausted_up")
+    if side == "DOWN" and inputs.get("haExhaustedRed"):
+        return _no_ev("ha_exhausted_down")
 
-    # Inside the dead band there is no side. A held position is KEPT (not closed) — the
-    # band means "this is noise, don't act", not "get out".
-    if side is None:
-        return _no_trade("at_the_open", None, distance)
+    rsi = inputs.get("rsi")
+    if rsi is not None:
+        if side == "UP" and rsi > 70:
+            return _no_ev("rsi_overbought")
+        if side == "DOWN" and rsi < 30:
+            return _no_ev("rsi_oversold")
 
-    # Already on the right side — nothing to do. This is the "buy UP only if there is no
-    # open UP position" half of the rule.
-    if held == side:
-        return _no_trade("already_holding_signal_side", side, distance)
+    # ── GATES ──
+    if p < min_prob:
+        return _no_ev(f"prob_{p:.2f}_below_{min_prob:.2f}")
+    if ev < ev_threshold:
+        return _no_ev(f"ev_{ev:.3f}_below_{ev_threshold:.3f}")
 
-    # Holding the OTHER side: close it and take this one. A reversal is an exit first, so
-    # it is not gated on time or on the stop-loss block — being on the wrong side of the
-    # open is the exact thing this strategy refuses to keep paying for.
-    if held:
-        return {"action": "REVERSE", "side": side, "phase": "LEVEL", "strength": "LEVEL",
-                "reason": "wrong_side_of_open", "distance": distance}
-
-    # ── FLAT: entry gates ──
-    # Don't re-buy the side that just stopped out; wait until price is on the other side.
-    if blocked and side == blocked:
-        return _no_trade(f"{side.lower()}_blocked_after_stop_loss", side, distance)
-    # Too close to expiry to trust a Fill-Or-Kill fill, and too close for a take-profit to
-    # have room to happen. Fails CLOSED: a missing secondsLeft blocks the entry.
-    if seconds_left is None or seconds_left < min_seconds_left:
-        left_txt = "unknown" if seconds_left is None else f"{seconds_left:.0f}s"
-        return _no_trade(f"only_{left_txt}_left_below_{min_seconds_left:.0f}s", side, distance)
-
-    return {"action": "ENTER", "side": side, "phase": "LEVEL", "strength": "LEVEL",
-            "reason": "above_open" if side == "UP" else "below_open", "distance": distance}
+    strength = "HIGH_CONVICTION" if p >= 0.70 else "STRONG"
+    return {
+        "action": "ENTER", "side": side, "phase": "EV", "strength": strength,
+        "prob": p, "price": price, "ev": ev, "reason": "ev_enter"
+    }

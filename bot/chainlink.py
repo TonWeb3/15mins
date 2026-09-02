@@ -43,7 +43,7 @@ class ChainlinkFetcher:
         aggregator_address = settings.CHAINLINK_BTC_USD_AGGREGATOR
         for rpc in rpcs:
             try:
-                w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc, request_kwargs={'timeout': 2.0}))
+                w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc, request_kwargs={'timeout': 3.0}))
                 contract = w3.eth.contract(address=AsyncWeb3.to_checksum_address(aggregator_address), abi=AGGREGATOR_ABI)
 
                 if self.cached_decimals is None:
@@ -54,10 +54,6 @@ class ChainlinkFetcher:
                 updated_at = round_data[3]
 
                 price = answer / (10 ** self.cached_decimals)
-                # Reject a bad/degenerate round (negative or zero price) — try the next RPC
-                # rather than returning a garbage price that would mis-mark a settlement.
-                if price <= 0:
-                    continue
                 self.cached_result = {
                     "price": price,
                     "updatedAt": updated_at * 1000,
@@ -67,8 +63,7 @@ class ChainlinkFetcher:
                 self.preferred_rpc_url = rpc
                 return self.cached_result
             except Exception as e:
-                # Keep any decimals we already fetched — a transient latestRoundData failure
-                # on one RPC shouldn't force a decimals() re-fetch on the next.
+                self.cached_decimals = None
                 continue
 
         return self.cached_result

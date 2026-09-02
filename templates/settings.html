@@ -46,33 +46,12 @@
                             <option value="fixed">Fixed Amount ($)</option>
                             <option value="percent">Percentage of Balance (%)</option>
                         </select>
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Fixed = flat $ per trade. Percent = % of the balance <strong>recorded when the 15m window opened</strong>, so every trade in a window is the same size.</p>
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Fixed = flat $ per trade. Percent = % of balance.</p>
                     </div>
                     <div>
                         <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Risk Value</label>
                         <input type="number" step="0.01" x-model.number="form.trading.risk_value" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
                     </div>
-                </div>
-
-                <div class="p-4 bg-gray-900/50 rounded-lg border border-gray-700 mt-4">
-                    <h3 class="text-sm font-bold text-emerald-400 uppercase mb-3">Per-Window Budget</h3>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-[10px] text-gray-500 mb-1 uppercase">Max Loss (% of risk per trade)</label>
-                            <input type="number" step="1" min="0" x-model.number="form.window_risk.max_loss_pct" class="w-full bg-gray-700 border-none rounded p-2 text-xs text-white">
-                            <p class="text-[10px] text-gray-500 mt-1 italic">30 with a 10% stop-loss = <strong>three stop-losses</strong>, then no more entries this window.</p>
-                        </div>
-                        <div>
-                            <label class="block text-[10px] text-gray-500 mb-1 uppercase">Max Win (% of risk per trade)</label>
-                            <input type="number" step="1" min="0" x-model.number="form.window_risk.max_win_pct" class="w-full bg-gray-700 border-none rounded p-2 text-xs text-white">
-                            <p class="text-[10px] text-gray-500 mt-1 italic">30 with a 30% take-profit = <strong>one winner</strong>, then stop for the window.</p>
-                        </div>
-                    </div>
-                    <label class="flex items-center gap-2 mt-3">
-                        <input type="checkbox" x-model="form.window_risk.stop_after_win" class="w-4 h-4">
-                        <span class="text-sm text-gray-300">Stop trading for the rest of the window after any winning close</span>
-                    </label>
-                    <p class="text-[10px] text-gray-500 mt-2 italic">Both caps are measured against the risk-per-trade of the window they apply to, and reset the moment the next 15m window opens.</p>
                 </div>
             </div>
 
@@ -98,42 +77,36 @@
 
             <!-- Strategy Controls -->
             <div class="bg-gray-800 p-5 sm:p-6 rounded-lg shadow-lg">
-                <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Entry Rule</h2>
-                <p class="text-[11px] text-gray-400 mb-4 italic">Spot above the window's open → buy UP. Below → buy DOWN. When price is on the other side of the open, the held side is sold and reversed. There is no model and no probability gate — only the settings below shape it.</p>
+                <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Strategy Controls</h2>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 mb-4">
                     <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Dead Band Around the Open ($)</label>
-                        <input type="number" step="1" min="0" x-model.number="form.entry.min_move_usd" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Price must be more than this far from the open to count as above/below. Inside the band there is no signal and an open position is simply held. 0 = flip on any distance — measured live, that reversed the position <strong>twice in one second</strong> on $3 of BTC movement, costing ~7% of stake each time.</p>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">EV Threshold</label>
+                        <input type="number" step="0.01" min="0" max="0.5" x-model.number="form.ev.ev_threshold" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Enter only when fair prob − share price ≥ this (e.g. 0.04 = a 4¢ edge). The latency-edge gate.</p>
                     </div>
                     <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Min Seconds Left</label>
-                        <input type="number" step="1" min="0" max="300" x-model.number="form.entry.min_seconds_left" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Stop OPENING this many seconds before the 15m window ends (e.g. 20). A Fill-Or-Kill into a closing book is an unreliable fill, and a take-profit needs room to happen. Exits and stop-losses still run.</p>
-                    </div>
-                    <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Min Book Liquidity ($)</label>
-                        <input type="number" step="1" min="0" x-model.number="form.entry.min_book_liquidity_usd" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Skip the trade if the ask side can't absorb the whole stake. The stake is never trimmed to fit a thin book.</p>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Min Probability</label>
+                        <input type="number" step="0.01" min="0.5" max="0.99" x-model.number="form.ev.min_prob" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Don't bet near-coinflips even if EV looks positive (e.g. 0.55).</p>
                     </div>
                 </div>
 
-                <div class="p-4 bg-gray-900/50 rounded-lg border border-gray-700 mt-4">
+                <div class="p-4 bg-gray-900/50 rounded-lg border border-gray-700">
                     <label class="flex items-center gap-2 mb-3">
-                        <input type="checkbox" x-model="form.tp_sl.enabled" class="w-4 h-4">
-                        <span class="text-sm font-bold text-emerald-400 uppercase">Take-Profit / Stop-Loss (the only exit)</span>
+                        <input type="checkbox" x-model="form.flip.enabled" class="w-4 h-4">
+                        <span class="text-sm font-bold text-blue-400 uppercase">Close &amp; Flip on Strong Opposite Signal</span>
                     </label>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-1 uppercase">Take Profit (% of stake)</label>
-                            <input type="number" step="1" min="1" x-model.number="form.tp_sl.take_profit_pct" class="w-full bg-gray-700 border-none rounded p-2 text-xs text-white">
+                            <label class="block text-[10px] text-gray-500 mb-1 uppercase">Min Conviction (opposite)</label>
+                            <input type="number" step="0.01" min="0.5" max="1" x-model.number="form.flip.min_conviction" class="w-full bg-gray-700 border-none rounded p-2 text-xs text-white">
                         </div>
                         <div>
-                            <label class="block text-[10px] text-gray-500 mb-1 uppercase">Stop Loss (% of stake)</label>
-                            <input type="number" step="1" min="1" x-model.number="form.tp_sl.stop_loss_pct" class="w-full bg-gray-700 border-none rounded p-2 text-xs text-white">
+                            <label class="block text-[10px] text-gray-500 mb-1 uppercase">Min Minutes Left</label>
+                            <input type="number" step="0.5" min="0" x-model.number="form.flip.min_minutes_left" class="w-full bg-gray-700 border-none rounded p-2 text-xs text-white">
                         </div>
                     </div>
-                    <p class="text-[10px] text-gray-500 mt-2 italic">Measured on <strong>market movement</strong> — how far the position's value moved after the spread you paid to enter, not including it. (Measuring from the stake meant a ~50¢ position with a 5¢ spread was already ~10% down on fill, so the stop fired within seconds of entry, once even in the same second.) The spread is still paid, so a booked win/loss is about one spread smaller/larger than the % here. A <strong>take-profit ends the window</strong>; a <strong>stop-loss</strong> spends part of the loss budget and blocks that direction until price is on the other side of the open.</p>
+                    <p class="text-[10px] text-gray-500 mt-2 italic">When on, an open position is sold and reversed if the opposite side clears the conviction and time thresholds (sells into the book in live mode).</p>
                 </div>
             </div>
 
@@ -142,74 +115,32 @@
                 <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Credentials & Live Trading</h2>
                 <div class="space-y-4 sm:space-y-6">
                     <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Private Key or Seed Phrase</label>
-                        <div class="flex flex-col sm:flex-row gap-2">
-                            <input type="password" x-model="form.private_key" class="flex-1 bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="0x... private key  —or—  twelve word seed phrase">
-                            <button type="button" @click="testCredentials" :disabled="testBusy"
-                                    class="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-3 px-5 rounded-lg transition text-sm whitespace-nowrap flex items-center justify-center gap-2">
-                                <svg x-show="testBusy" class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-                                </svg>
-                                <span x-text="testBusy ? 'Testing…' : 'Test Connection'"></span>
-                            </button>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Private Key</label>
+                        <input type="password" x-model="form.private_key" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="0x...">
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                        <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Wallet / Signature Type</label>
+                            <select x-model.number="form.live.signature_type" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                                <option :value="0">EOA (own wallet)</option>
+                                <option :value="1">Email / Magic proxy</option>
+                                <option :value="2">Browser proxy</option>
+                            </select>
                         </div>
-                        <p class="text-[10px] text-gray-500 mt-2 italic">EOA only. Paste a hex private key OR a 12/24-word seed phrase — the wallet is derived from it. Only the derived key is stored; the seed phrase is never written to disk. <strong>Test Connection</strong> saves, derives the wallet address and checks which wallet holds pUSD.</p>
-                        <p x-show="testResult" x-transition class="text-xs mt-2 font-mono break-all"
-                           :class="testOk ? 'text-green-400' : 'text-red-400'" x-text="testResult"></p>
+                        <div>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Funder Address</label>
+                            <input type="text" x-model="form.live.funder" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="0x... (required for proxy wallets)">
+                        </div>
                     </div>
-                    <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Relayer API Key</label>
-                        <input type="password" x-model="form.relayer.api_key" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="Polymarket relayer API key (Settings → Relayer API keys)">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Sponsors gas for on-chain setup (deposit-wallet deploy + approvals) so you never pay gas. Get it from polymarket.com → Settings → Relayer API keys. The key's owner address is derived from your wallet automatically.</p>
-                    </div>
-                    <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Alchemy RPC API Key</label>
-                        <input type="password" x-model="form.chainlink.alchemy_api_key" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="Alchemy Polygon API key (optional, for on-chain reads)">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Optional. Used for on-chain reads/setup; leave blank to use public RPCs.</p>
-                    </div>
-                    <p class="text-[10px] text-gray-500 italic">Live mode places real Fill-Or-Kill orders on Polymarket CLOB V2. Your key/seed only <strong>signs</strong> orders (holds no funds or gas); funds live in your Polymarket deposit wallet, and the relayer pays gas. The one-time on-chain approvals are set automatically (gaslessly) before your first live order.</p>
-                </div>
-            </div>
-
-            <!-- Auto-withdrawal (capital extractor) -->
-            <div class="bg-gray-800 p-5 sm:p-6 rounded-lg shadow-lg">
-                <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Auto-Withdrawal (Capital Extractor)</h2>
-                <label class="flex items-center gap-2 mb-4">
-                    <input type="checkbox" x-model="form.capital_extractor.enabled" class="w-4 h-4">
-                    <span class="text-sm font-bold text-emerald-400 uppercase">Enable auto-withdrawal</span>
-                </label>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6" :class="form.capital_extractor.enabled ? '' : 'opacity-50 pointer-events-none'">
-                    <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Trigger Balance ($)</label>
-                        <input type="number" step="1" min="0" x-model.number="form.capital_extractor.trigger_balance" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Withdraw once the live balance reaches this (e.g. 2000).</p>
-                    </div>
-                    <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Withdraw Amount ($)</label>
-                        <input type="number" step="1" min="0" x-model.number="form.capital_extractor.withdraw_amount" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">Amount of pUSD to withdraw each time (e.g. 1000 = half of 2000).</p>
-                    </div>
-                    <div class="md:col-span-2">
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Withdraw To (destination address)</label>
-                        <input type="text" x-model="form.capital_extractor.withdraw_address" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="0x... wallet that receives the pUSD (blank = your own key/seed wallet)">
-                        <p class="text-[10px] text-gray-500 mt-2 italic">The pUSD is sent here (gasless). Leave blank to send to <strong>your own wallet</strong> (the key/seed EOA). Double-check the address — withdrawals move real funds and cannot be undone.</p>
-                    </div>
-                    <div>
-                        <label class="flex items-center gap-2 mt-1">
-                            <input type="checkbox" x-model="form.capital_extractor.auto_resume_after_withdrawal" class="w-4 h-4">
-                            <span class="text-sm text-gray-300">Auto-resume trading after withdrawal</span>
-                        </label>
-                    </div>
-                    <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Resume After</label>
-                        <select x-model="form.capital_extractor.resume_after" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
-                            <option value="submitted">Submitted (immediately)</option>
-                            <option value="confirmed">Confirmed</option>
-                        </select>
+                    <p class="text-[10px] text-gray-500 italic">Live mode places real Fill-Or-Kill market orders on the Polymarket CLOB. The wallet must hold USDC on Polygon and have approved the exchange contracts. Leave Funder blank for an EOA (type 0).</p>
+                    <div class="pt-2">
+                        <button type="button" @click="setupAllowances" :disabled="allowanceBusy"
+                                class="w-full sm:w-auto bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold py-2 px-5 rounded-lg transition text-sm">
+                            <span x-text="allowanceBusy ? 'Setting up… (~30s)' : 'Setup Allowances (EOA only)'"></span>
+                        </button>
+                        <p class="text-[10px] text-gray-500 mt-2 italic">One-time: approves the Polymarket contracts to spend this wallet's USDC/CTF. Save your private key first; needs a little POL for gas. Not needed for proxy wallets.</p>
                     </div>
                 </div>
-                <p class="text-[10px] text-gray-500 mt-3 italic">When balance ≥ trigger: pause new entries → wait until flat (open positions settle) → withdraw the amount → resume automatically. Live mode only.</p>
             </div>
 
             <div class="flex justify-center sm:justify-end">
@@ -230,21 +161,16 @@
                     mode: 'paper',
                     paper_balance_usd: 1000,
                     private_key: '',
-                    relayer: { api_key: '' },
-                    chainlink: { alchemy_api_key: '' },
-                    capital_extractor: { enabled: false, trigger_balance: 2000, withdraw_amount: 1000, withdraw_address: '', auto_resume_after_withdrawal: true, resume_after: 'submitted' },
                     polymarket: { series_id: '' },
                     trading: { symbol: '', risk_type: 'percent', risk_value: 10 },
-                    entry: { min_move_usd: 5, min_book_liquidity_usd: 20.0, min_seconds_left: 20 },
-                    window_risk: { max_loss_pct: 30, max_win_pct: 30, stop_after_win: true },
-                    tp_sl: { enabled: true, take_profit_pct: 30, stop_loss_pct: 10 }
+                    ev: { ev_threshold: 0.04, min_prob: 0.55, min_book_liquidity_usd: 20.0 },
+                    live: { signature_type: 0, funder: '' },
+                    flip: { enabled: false, min_conviction: 0.80, min_minutes_left: 9.0 }
                 },
                 message: '',
                 messageType: '',
                 availableSeries: [],
-                testBusy: false,
-                testResult: '',
-                testOk: false,
+                allowanceBusy: false,
                 async init() {
                     try {
                         const [res, sRes] = await Promise.all([
@@ -277,36 +203,27 @@
                         setTimeout(() => this.message = '', 3000);
                     }
                 },
-                async testCredentials() {
-                    this.testBusy = true;
-                    this.testResult = '';
+                async setupAllowances() {
+                    this.allowanceBusy = true;
+                    this.message = "Setting up allowances on-chain… (~30s)";
+                    this.messageType = 'success';
                     try {
-                        // Save first so the entered key/seed + relayer is stored and the client re-inits.
-                        await fetch('/api/settings', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(this.form)
-                        });
-                        const res = await fetch('/api/test-connection', { method: 'POST' });
-                        const d = await res.json();
-                        if (d.ok) {
-                            this.testOk = true;
-                            const stName = {0:'EOA',1:'proxy',2:'safe',3:'deposit'}[d.chosen_signature_type] || d.chosen_signature_type;
-                            const funded = (d.wallets || []).filter(w => w.pusd_balance > 0)
-                                .map(w => '$' + Number(w.pusd_balance).toFixed(2) + ' in ' + w.address.slice(0,8) + '…');
-                            this.testResult = 'Active ✓  EOA ' + d.eoa +
-                                '  ·  trading wallet (' + stName + ') ' + d.funder +
-                                '  ·  relayer key ' + (d.relayer_key_set ? 'set' : 'MISSING') +
-                                (funded.length ? ('  ·  funds: ' + funded.join(', ')) : '  ·  no pUSD found yet — deposit on polymarket.com');
+                        const res = await fetch('/api/setup-allowances', { method: 'POST' });
+                        const data = await res.json();
+                        if (data.ok) {
+                            this.message = data.skipped ? ("Skipped: " + data.reason)
+                                : (data.already_set ? "Allowances already set." : ("Allowances set (" + data.actions.length + " tx)."));
+                            this.messageType = 'success';
                         } else {
-                            this.testOk = false;
-                            this.testResult = 'Failed: ' + (d.error || 'unknown') + (d.eoa ? ('  (EOA ' + d.eoa + ')') : '');
+                            this.message = "Allowance setup failed: " + (data.error || 'unknown');
+                            this.messageType = 'error';
                         }
                     } catch (e) {
-                        this.testOk = false;
-                        this.testResult = 'Test request failed';
+                        this.message = "Allowance setup request failed";
+                        this.messageType = 'error';
                     }
-                    this.testBusy = false;
+                    this.allowanceBusy = false;
+                    setTimeout(() => this.message = '', 6000);
                 }
             }
         }
