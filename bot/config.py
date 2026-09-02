@@ -1,7 +1,7 @@
 import os
 import json
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List, Dict, Any, Optional
+from typing import List, Dict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
@@ -10,17 +10,13 @@ class Settings(BaseSettings):
     PAPER_BALANCE_USD: float = 1000.0
     PRIVATE_KEY: str = ""
 
-    # Live trading (Polymarket CLOB)
-    CLOB_SIGNATURE_TYPE: int = 0   # 0 = EOA, 1 = Email/Magic proxy, 2 = Browser proxy
-    CLOB_FUNDER: str = ""          # proxy wallet address (required for signature_type 1/2)
+    # ── Live trading (Polymarket CLOB V2) ───────────────────────────────────────
+    # The wallet is DERIVED from PRIVATE_KEY (hex key or 12/24-word seed phrase) and
+    # auto-detected: deposit-wallet (V2, signature_type 3) first, then legacy proxy /
+    # safe — whichever actually holds pUSD. Nothing to pick by hand.
     CLOB_MAX_SLIPPAGE: float = 0.02  # marketable-limit buffer above the quote (probability units)
-
-    # Polymarket on-chain contracts (Polygon) — used for EOA allowance setup
-    USDC_ADDRESS: str = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-    CTF_ADDRESS: str = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
-    CLOB_EXCHANGE_ADDRESS: str = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
-    CLOB_NEG_RISK_EXCHANGE_ADDRESS: str = "0xC5d563A36AE78145C45a50134d48A1215220f80a"
-    CLOB_NEG_RISK_ADAPTER_ADDRESS: str = "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296"
+    RELAYER_API_KEY: str = ""        # Polymarket relayer API key (sponsors gasless on-chain setup)
+    ALCHEMY_API_KEY: str = ""        # optional: dedicated Polygon RPC for chain reads
 
     SYMBOL: str = "BTCUSDT"
     BINANCE_BASE_URL: str = "https://api.binance.com"
@@ -78,6 +74,11 @@ class Settings(BaseSettings):
         "BNB": "0x82a6C67606bdc0409f959f60608226064223A57c"
     }
 
+    def alchemy_rpc_url(self) -> str:
+        """Dedicated Polygon RPC for chain reads (pUSD balance, wallet derivation).
+        Empty string => the library's default public RPC."""
+        return f"https://polygon-mainnet.g.alchemy.com/v2/{self.ALCHEMY_API_KEY}" if self.ALCHEMY_API_KEY else ""
+
     def get_aggregator(self, symbol: str) -> str:
         s = symbol.upper()
         if s.endswith("USDT"): s = s[:-4]
@@ -87,6 +88,24 @@ class Settings(BaseSettings):
     HTTP_PROXY: str = os.getenv("HTTP_PROXY", os.getenv("http_proxy", ""))
     HTTPS_PROXY: str = os.getenv("HTTPS_PROXY", os.getenv("https_proxy", ""))
     ALL_PROXY: str = os.getenv("ALL_PROXY", os.getenv("all_proxy", ""))
+
+def normalize_private_key(secret: str) -> str:
+    """Accept either a raw hex private key or a 12/24-word seed phrase and return a
+    hex private key. EOA only — the trading wallet is derived from this secret and
+    nothing else. Returns "" for empty input. Raises if a seed phrase can't be parsed."""
+    secret = (secret or "").strip()
+    if not secret:
+        return ""
+    # A mnemonic is several space-separated words; a private key is a single token.
+    if len(secret.split()) >= 12:
+        from eth_account import Account
+        Account.enable_unaudited_hdwallet_features()
+        key = Account.from_mnemonic(secret).key.hex()
+        # hexbytes >= 1.0 returns bare hex; older returns it 0x-prefixed. Normalise so
+        # a derived key looks exactly like a pasted one downstream.
+        return key if key.startswith("0x") else "0x" + key
+    return secret
+
 
 def load_settings():
     base_settings = Settings()
@@ -98,12 +117,16 @@ def load_settings():
 
             if "mode" in config_data: base_settings.MODE = config_data["mode"]
             if "paper_balance_usd" in config_data: base_settings.PAPER_BALANCE_USD = config_data["paper_balance_usd"]
-            if "private_key" in config_data: base_settings.PRIVATE_KEY = config_data["private_key"]
+            if "private_key" in config_data:
+                base_settings.PRIVATE_KEY = normalize_private_key(config_data["private_key"])
+
+            if "relayer" in config_data:
+                rl = config_data["relayer"]
+                if "api_key" in rl: base_settings.RELAYER_API_KEY = rl["api_key"]
 
             if "live" in config_data:
                 live = config_data["live"]
-                if "signature_type" in live: base_settings.CLOB_SIGNATURE_TYPE = int(live["signature_type"])
-                if "funder" in live: base_settings.CLOB_FUNDER = live["funder"]
+                if "max_slippage" in live: base_settings.CLOB_MAX_SLIPPAGE = float(live["max_slippage"])
 
             if "polymarket" in config_data:
                 poly = config_data["polymarket"]
@@ -147,6 +170,7 @@ def load_settings():
                 if "polygon_rpc_url" in cl: base_settings.POLYGON_RPC_URL = cl["polygon_rpc_url"]
                 if "polygon_wss_url" in cl: base_settings.POLYGON_WSS_URL = cl["polygon_wss_url"]
                 if "btc_usd_aggregator" in cl: base_settings.CHAINLINK_BTC_USD_AGGREGATOR = cl["btc_usd_aggregator"]
+                if "alchemy_api_key" in cl: base_settings.ALCHEMY_API_KEY = cl["alchemy_api_key"]
 
         except Exception as e:
             print(f"Warning: Failed to load config.json: {e}")

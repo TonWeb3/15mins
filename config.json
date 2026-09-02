@@ -3,8 +3,10 @@
   "paper_balance_usd": 1000.0,
   "private_key": "",
   "live": {
-    "signature_type": 0,
-    "funder": ""
+    "max_slippage": 0.02
+  },
+  "relayer": {
+    "api_key": ""
   },
   "polymarket": {
     "gamma_base_url": "https://gamma-api.polymarket.com",
@@ -40,6 +42,7 @@
   "chainlink": {
     "polygon_rpc_url": "https://polygon.drpc.org",
     "polygon_wss_url": "wss://polygon-bor-rpc.publicnode.com",
-    "btc_usd_aggregator": "0xc907E116054Ad103354f2D350FD2514433D57F6f"
+    "btc_usd_aggregator": "0xc907E116054Ad103354f2D350FD2514433D57F6f",
+    "alchemy_api_key": ""
   }
 }

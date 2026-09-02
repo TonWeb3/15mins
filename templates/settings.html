@@ -115,30 +115,63 @@
                 <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Credentials & Live Trading</h2>
                 <div class="space-y-4 sm:space-y-6">
                     <div>
-                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Private Key</label>
-                        <input type="password" x-model="form.private_key" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="0x...">
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Private Key or Seed Phrase</label>
+                        <input type="password" x-model="form.private_key" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="0x...  or  twelve word seed phrase">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Your trading wallet is <strong>derived</strong> from this. It signs every order but holds no funds and needs no gas. A 12/24-word seed is converted to a hex key on save.</p>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                         <div>
-                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Wallet / Signature Type</label>
-                            <select x-model.number="form.live.signature_type" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
-                                <option :value="0">EOA (own wallet)</option>
-                                <option :value="1">Email / Magic proxy</option>
-                                <option :value="2">Browser proxy</option>
-                            </select>
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Relayer API Key</label>
+                            <input type="password" x-model="form.live.relayer_api_key" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="sponsors gasless setup">
+                            <p class="text-[10px] text-gray-500 mt-2 italic">Pays the gas for wallet deploy + approvals. Only needed once, for a fresh deposit wallet.</p>
                         </div>
                         <div>
-                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Funder Address</label>
-                            <input type="text" x-model="form.live.funder" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="0x... (required for proxy wallets)">
+                            <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Alchemy API Key <span class="text-gray-600">(optional)</span></label>
+                            <input type="password" x-model="form.live.alchemy_api_key" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="dedicated Polygon RPC">
+                            <p class="text-[10px] text-gray-500 mt-2 italic">A private RPC for chain reads. Blank uses the public default.</p>
                         </div>
                     </div>
-                    <p class="text-[10px] text-gray-500 italic">Live mode places real Fill-Or-Kill market orders on the Polymarket CLOB. The wallet must hold USDC on Polygon and have approved the exchange contracts. Leave Funder blank for an EOA (type 0).</p>
-                    <div class="pt-2">
-                        <button type="button" @click="setupAllowances" :disabled="allowanceBusy"
-                                class="w-full sm:w-auto bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold py-2 px-5 rounded-lg transition text-sm">
-                            <span x-text="allowanceBusy ? 'Setting up… (~30s)' : 'Setup Allowances (EOA only)'"></span>
+                    <div class="p-3 rounded-lg bg-gray-900/50 border border-gray-700">
+                        <p class="text-[11px] text-gray-400 leading-relaxed">
+                            <strong class="text-blue-400 uppercase">CLOB V2 — deposit wallet.</strong>
+                            Funds live as <strong>pUSD</strong> in a deposit wallet derived from your key; deposit
+                            through Polymarket. There is no signature type or funder address to choose —
+                            the bot checks the deposit, proxy and safe wallets and trades from whichever
+                            actually holds pUSD. Live mode places real Fill-Or-Kill orders.
+                        </p>
+                    </div>
+                    <div class="pt-2 flex flex-col sm:flex-row gap-3">
+                        <button type="button" @click="testConnection" :disabled="walletBusy"
+                                class="w-full sm:w-auto bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold py-2 px-5 rounded-lg transition text-sm">
+                            <span x-text="walletBusy === 'test' ? 'Checking…' : 'Test Connection'"></span>
                         </button>
-                        <p class="text-[10px] text-gray-500 mt-2 italic">One-time: approves the Polymarket contracts to spend this wallet's USDC/CTF. Save your private key first; needs a little POL for gas. Not needed for proxy wallets.</p>
+                        <button type="button" @click="setupWallet" :disabled="walletBusy"
+                                class="w-full sm:w-auto bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold py-2 px-5 rounded-lg transition text-sm">
+                            <span x-text="walletBusy === 'setup' ? 'Setting up… (~30s)' : 'Setup Wallet (gasless)'"></span>
+                        </button>
+                        <button type="button" @click="enableAutoRedeem" :disabled="walletBusy"
+                                class="w-full sm:w-auto bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white font-bold py-2 px-5 rounded-lg transition text-sm">
+                            <span x-text="walletBusy === 'redeem' ? 'Enabling…' : 'Enable Auto-Redeem'"></span>
+                        </button>
+                    </div>
+                    <p class="text-[10px] text-gray-500 italic">Save your key first. <strong>Test Connection</strong> is read-only and shows every derived wallet with its pUSD balance. <strong>Setup Wallet</strong> deploys + approves the deposit wallet (needs the relayer key). <strong>Auto-Redeem</strong> makes winning positions turn back into pUSD by themselves.</p>
+
+                    <!-- Wallet diagnostic result -->
+                    <div x-show="wallets.length" x-transition class="mt-2 p-3 rounded-lg bg-black/40 border border-gray-700">
+                        <div class="flex items-center justify-between mb-2">
+                            <h4 class="text-[11px] uppercase font-bold tracking-wider text-gray-400">Derived wallets</h4>
+                            <span class="text-[10px] font-mono text-gray-500" x-text="'EOA ' + (eoa || '-')"></span>
+                        </div>
+                        <template x-for="w in wallets" :key="w.address">
+                            <div class="flex items-center justify-between text-[10px] font-mono py-1 border-t border-gray-800">
+                                <span :class="w.address === chosenFunder ? 'text-green-400 font-bold' : 'text-gray-400'"
+                                      x-text="(w.address === chosenFunder ? '\u2713 ' : '  ') + labelFor(w.signature_type)"></span>
+                                <span class="text-gray-500 truncate mx-2 flex-1" x-text="w.address"></span>
+                                <span :class="w.pusd_balance > 0 ? 'text-green-400' : 'text-gray-600'"
+                                      x-text="w.pusd_balance == null ? '?' : ('$' + Number(w.pusd_balance).toFixed(2))"></span>
+                            </div>
+                        </template>
+                        <p class="text-[10px] text-gray-600 italic mt-2">The ticked wallet is the one orders will trade from.</p>
                     </div>
                 </div>
             </div>
@@ -164,13 +197,16 @@
                     polymarket: { series_id: '' },
                     trading: { symbol: '', risk_type: 'percent', risk_value: 10 },
                     ev: { ev_threshold: 0.04, min_prob: 0.55, min_book_liquidity_usd: 20.0 },
-                    live: { signature_type: 0, funder: '' },
+                    live: { relayer_api_key: '', alchemy_api_key: '', max_slippage: 0.02 },
                     flip: { enabled: false, min_conviction: 0.80, min_minutes_left: 9.0 }
                 },
                 message: '',
                 messageType: '',
                 availableSeries: [],
-                allowanceBusy: false,
+                walletBusy: '',
+                wallets: [],
+                eoa: '',
+                chosenFunder: '',
                 async init() {
                     try {
                         const [res, sRes] = await Promise.all([
@@ -203,26 +239,61 @@
                         setTimeout(() => this.message = '', 3000);
                     }
                 },
-                async setupAllowances() {
-                    this.allowanceBusy = true;
-                    this.message = "Setting up allowances on-chain… (~30s)";
-                    this.messageType = 'success';
+                labelFor(t) {
+                    return t === 3 ? 'Deposit (V2)' : (t === 1 ? 'Poly proxy' : (t === 2 ? 'Safe proxy' : 'Wallet ' + t));
+                },
+                // Read-only: which wallets exist and where the money is.
+                async testConnection() {
+                    this.walletBusy = 'test';
+                    this.flash("Checking wallets…", 'success');
                     try {
-                        const res = await fetch('/api/setup-allowances', { method: 'POST' });
-                        const data = await res.json();
+                        const data = await (await fetch('/api/test-connection', { method: 'POST' })).json();
                         if (data.ok) {
-                            this.message = data.skipped ? ("Skipped: " + data.reason)
-                                : (data.already_set ? "Allowances already set." : ("Allowances set (" + data.actions.length + " tx)."));
-                            this.messageType = 'success';
+                            this.wallets = data.wallets || [];
+                            this.eoa = data.eoa || '';
+                            this.chosenFunder = data.funder || '';
+                            this.flash("Connected. Trading from " + this.labelFor(data.chosen_signature_type)
+                                + (data.relayer_key_set ? "" : " (no relayer key set)"), 'success');
                         } else {
-                            this.message = "Allowance setup failed: " + (data.error || 'unknown');
-                            this.messageType = 'error';
+                            this.wallets = [];
+                            this.flash("Connection failed: " + (data.error || 'unknown'), 'error');
                         }
                     } catch (e) {
-                        this.message = "Allowance setup request failed";
-                        this.messageType = 'error';
+                        this.flash("Connection request failed", 'error');
                     }
-                    this.allowanceBusy = false;
+                    this.walletBusy = '';
+                },
+                async setupWallet() {
+                    this.walletBusy = 'setup';
+                    this.flash("Setting up the deposit wallet on-chain… (~30s)", 'success');
+                    try {
+                        const data = await (await fetch('/api/setup-wallet', { method: 'POST' })).json();
+                        if (data.ok) {
+                            this.flash(data.skipped ? "Already set up this session."
+                                : ("Wallet ready (" + (data.approvals || 0) + " approvals)."), 'success');
+                        } else {
+                            this.flash("Setup failed: " + (data.error === 'missing_relayer_api_key'
+                                ? 'no relayer API key set' : (data.error || 'unknown')), 'error');
+                        }
+                    } catch (e) {
+                        this.flash("Setup request failed", 'error');
+                    }
+                    this.walletBusy = '';
+                },
+                async enableAutoRedeem() {
+                    this.walletBusy = 'redeem';
+                    try {
+                        const data = await (await fetch('/api/enable-auto-redeem', { method: 'POST' })).json();
+                        this.flash(data.ok ? "Auto-redeem enabled."
+                            : ("Auto-redeem failed: " + (data.error || 'unknown')), data.ok ? 'success' : 'error');
+                    } catch (e) {
+                        this.flash("Auto-redeem request failed", 'error');
+                    }
+                    this.walletBusy = '';
+                },
+                flash(msg, type) {
+                    this.message = msg;
+                    this.messageType = type;
                     setTimeout(() => this.message = '', 6000);
                 }
             }

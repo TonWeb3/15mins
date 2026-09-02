@@ -3,7 +3,7 @@ import time
 import json
 import os
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -334,18 +334,32 @@ async def execute_trade(decision: Dict[str, Any], market_prices: Dict[str, Any],
 
         result = await asyncio.to_thread(clob_trader.place_market_buy, token_id, amount_to_risk, price)
         if result.get("ok"):
-            resp = result.get("response") or {}
-            order_id = None
-            if isinstance(resp, dict):
-                order_id = resp.get("orderID") or resp.get("orderId") or resp.get("id")
-            trade["order_id"] = order_id
-            trade["order_response"] = resp
+            trade["order_id"] = result.get("order_id")
+            trade["order_response"] = result.get("response") or {}
+            trade["token_id"] = token_id
+            # Record what ACTUALLY filled, not what we asked for. A Fill-Or-Kill can
+            # fill anywhere up to the limit price, so shares != amount / quote. Using
+            # the estimate here would misprice every live position and its P/L.
+            fill_size = result.get("fill_size")
+            fill_price = result.get("fill_price")
+            fill_usd = result.get("fill_usd")
+            if fill_size and fill_price:
+                trade["shares"] = float(fill_size)
+                trade["entry_price"] = float(fill_price)
+                trade["amount"] = float(fill_usd if fill_usd else fill_size * fill_price)
+                trade["quoted_price"] = price          # what we saw before sending
+                trade["slippage"] = float(fill_price) - float(price) if price else None
             state["active_trades"].append(trade)
             state["last_trade_side"] = side
             save_state()
-            log_message(f"Executed LIVE trade: {side} ${amount_to_risk:.2f} on {market.get('slug')} (order {order_id})")
+            log_message(
+                f"Executed LIVE trade: {side} ${trade['amount']:.2f} on {market.get('slug')} "
+                f"— {trade['shares']:.2f} shares @ {trade['entry_price']:.4f} "
+                f"(quote {price}, order {trade['order_id']})")
             return "entered"
         else:
+            # A KILLED Fill-Or-Kill lands here and opens NO position — which is the
+            # point: previously an unfilled order was recorded as a live trade.
             log_message(f"LIVE trade FAILED ({side}): {result.get('error')}")
             return "live_order_failed"
 
@@ -390,8 +404,14 @@ async def maybe_flip_position(decision: Dict[str, Any], poly_snapshot: Dict[str,
         token_id = token_ids.get(held_key)
         result = await asyncio.to_thread(clob_trader.place_market_sell, token_id, trade["shares"], exit_price)
         if not result.get("ok"):
-            log_message(f"FLIP sell FAILED ({trade['side']}): {result.get('error')}")
+            # Killed FOK => we still HOLD the position. Leave it open and let it settle
+            # at expiry rather than recording a close that never happened.
+            log_message(f"FLIP sell FAILED ({trade['side']}): {result.get('error')} — position kept")
             return
+        # Price the exit off the REAL fill, not the quote we aimed at.
+        if result.get("fill_price"):
+            exit_price = float(result["fill_price"])
+        trade["exit_order_id"] = result.get("order_id")
         # live balance is refreshed from chain elsewhere
     else:
         state["paper_balance"] += trade["shares"] * exit_price  # proceeds from selling out
@@ -464,6 +484,43 @@ def mark_window_open(start_ms: int, window_ms: int, current_price: Optional[floa
                     f"({price_source}) / Binance {spot_price if spot_price else '-'}")
     state["last_window_start"] = start_ms
     return win
+
+
+async def _redeem_win(trade: Dict[str, Any], market: Optional[Dict[str, Any]],
+                      up_index: int, down_index: int, winning_index: int):
+    """Redeem a winning LIVE position into pUSD.
+
+    Winning outcome tokens are CTF conditional tokens worth $1 each; they only become
+    spendable collateral once redeemed. `get_usdc_balance()` reads pUSD and cannot see
+    them, so without this a live win never shows up in the balance.
+
+    Best-effort: the result is recorded on the trade either way, and a failure is
+    logged rather than raised — settlement must never be blocked by a redeem problem.
+    """
+    condition_id = (market or {}).get("conditionId") or (market or {}).get("condition_id")
+    if not condition_id:
+        trade["redeem"] = {"ok": False, "error": "missing_condition_id"}
+        log_message(f"REDEEM skipped for {trade['market_slug']}: no conditionId on the market")
+        return
+
+    # The CTF expects one amount per outcome, in index order; the losing leg is 0.
+    amounts = [0.0, 0.0]
+    idx = up_index if winning_index == up_index else down_index
+    if 0 <= idx < len(amounts):
+        amounts[idx] = float(trade.get("shares") or 0.0)
+
+    neg_risk = bool((market or {}).get("negRisk") or (market or {}).get("neg_risk") or False)
+    try:
+        res = await asyncio.to_thread(clob_trader.redeem, condition_id, amounts, neg_risk)
+    except Exception as e:
+        res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    trade["redeem"] = res
+    if res.get("ok"):
+        log_message(f"REDEEM ok for {trade['market_slug']}: {amounts[idx]:.2f} shares (tx {res.get('tx')})")
+    else:
+        log_message(f"REDEEM FAILED for {trade['market_slug']}: {res.get('error')} "
+                    f"— redeem manually on Polymarket to free the capital")
 
 
 def _archive(trade: Dict[str, Any]) -> Dict[str, Any]:
@@ -640,6 +697,11 @@ async def update_trades(current_prices: Dict[str, Any]):
             trade["profit_loss"] = payout - trade["amount"]
             log_message(f"WIN: {trade['side']} on {trade['market_slug']}: {dir_txt} "
                         f"[{trade['resolution']}]. Profit: ${trade['profit_loss']:.2f}")
+            # A winning LIVE position is still a CTF token worth $1 — it does not
+            # become spendable pUSD on its own. Redeem it, or the balance silently
+            # under-reports and the capital strands.
+            if trade.get("mode") == "live":
+                await _redeem_win(trade, market, up_index, down_index, winning_index)
         else:
             trade["profit_loss"] = -trade["amount"]
             log_message(f"LOSS: {trade['side']} on {trade['market_slug']}: {dir_txt} "
@@ -1027,16 +1089,21 @@ async def get_available_series():
 
 @app.get("/api/settings")
 async def get_settings():
-    pk = settings.PRIVATE_KEY
-    masked_pk = pk[:6] + "..." + pk[-4:] if pk and len(pk) > 10 else pk
+    def mask(v: str) -> str:
+        return v[:6] + "..." + v[-4:] if v and len(v) > 10 else v
+
+    masked_pk = mask(settings.PRIVATE_KEY)
 
     return {
         "mode": settings.MODE,
         "paper_balance_usd": settings.PAPER_BALANCE_USD,
         "private_key": masked_pk,
         "live": {
-            "signature_type": settings.CLOB_SIGNATURE_TYPE,
-            "funder": settings.CLOB_FUNDER
+            # signature_type / funder are AUTO-DETECTED from the key under CLOB V2 —
+            # they are reported for visibility, not for editing.
+            "relayer_api_key": mask(settings.RELAYER_API_KEY),
+            "alchemy_api_key": mask(settings.ALCHEMY_API_KEY),
+            "max_slippage": settings.CLOB_MAX_SLIPPAGE
         },
         "polymarket": {
             "series_id": settings.POLYMARKET_SERIES_ID,
@@ -1072,7 +1139,13 @@ async def post_settings(new_settings: Dict[str, Any]):
     if new_pk and "..." in new_pk:
         new_settings["private_key"] = settings.PRIVATE_KEY
     elif new_pk:
-        settings.PRIVATE_KEY = new_pk
+        # Accepts a hex key OR a 12/24-word seed phrase; stored as hex either way.
+        from bot.config import normalize_private_key
+        try:
+            settings.PRIVATE_KEY = normalize_private_key(new_pk)
+            new_settings["private_key"] = settings.PRIVATE_KEY
+        except Exception as e:
+            return {"status": "error", "error": f"invalid_private_key: {e}"}
 
     # Deep-merge into the existing config so keys not present in the settings form
     # (chainlink, binance_base_url, poll_interval_ms, etc.) are preserved.
@@ -1126,8 +1199,22 @@ async def post_settings(new_settings: Dict[str, Any]):
 
     if "live" in new_settings:
         lv = new_settings["live"]
-        settings.CLOB_SIGNATURE_TYPE = int(lv.get("signature_type", settings.CLOB_SIGNATURE_TYPE))
-        settings.CLOB_FUNDER = lv.get("funder", settings.CLOB_FUNDER)
+        if "max_slippage" in lv:
+            settings.CLOB_MAX_SLIPPAGE = float(lv["max_slippage"])
+        # A value still showing the "abc123...wxyz" mask was not edited — keep the real
+        # one rather than overwriting the secret with its own mask.
+        rk = lv.get("relayer_api_key")
+        if rk and "..." not in rk:
+            settings.RELAYER_API_KEY = rk
+            new_settings.setdefault("relayer", {})["api_key"] = rk
+        elif rk:
+            lv["relayer_api_key"] = settings.RELAYER_API_KEY
+        ak = lv.get("alchemy_api_key")
+        if ak and "..." not in ak:
+            settings.ALCHEMY_API_KEY = ak
+            new_settings.setdefault("chainlink", {})["alchemy_api_key"] = ak
+        elif ak:
+            lv["alchemy_api_key"] = settings.ALCHEMY_API_KEY
 
     # Credentials/signature may have changed — drop the cached CLOB client so the
     # next live order re-initialises with the new key/signature/funder.
@@ -1164,24 +1251,55 @@ async def post_settings(new_settings: Dict[str, Any]):
 
     return {"status": "ok"}
 
-@app.post("/api/setup-allowances")
-async def setup_allowances():
-    import bot.allowances as allowances
+@app.post("/api/setup-wallet")
+async def setup_wallet():
+    """One-time gasless on-chain setup for the deposit wallet: deploy it if needed and
+    set the token approvals, sponsored by the relayer key. Replaces the old manual EOA
+    allowance flow — under CLOB V2 you never pay gas for this."""
     try:
-        result = await allowances.ensure_allowances()
+        result = await asyncio.to_thread(clob_trader.ensure_setup)
         if result.get("ok"):
             if result.get("skipped"):
-                log_message(f"Allowance setup skipped: {result.get('reason')}")
-            elif result.get("already_set"):
-                log_message("Allowances already configured for trading wallet")
+                log_message("Wallet setup: already done this session")
             else:
-                log_message(f"Allowances configured ({len(result.get('actions', []))} tx)")
+                log_message(f"Wallet setup complete ({result.get('approvals', 0)} approvals)")
         else:
-            log_message(f"Allowance setup failed: {result.get('error')}")
+            log_message(f"Wallet setup failed: {result.get('error')}")
         return result
     except Exception as e:
-        log_message(f"Allowance setup error: {e}")
+        log_message(f"Wallet setup error: {e}")
         return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/test-connection")
+async def test_connection():
+    """Read-only diagnostic: derive the EOA from the key/seed, list every candidate
+    wallet (deposit / proxy / safe) with its pUSD balance, and report which one will
+    actually be traded from. Needs no relayer key."""
+    try:
+        result = await asyncio.to_thread(clob_trader.test_connection)
+        if result.get("ok"):
+            log_message(f"Connection OK — EOA {result.get('eoa')}, trading from "
+                        f"{result.get('funder')} (sig type {result.get('chosen_signature_type')})")
+        else:
+            log_message(f"Connection test failed: {result.get('error')}")
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/api/enable-auto-redeem")
+async def enable_auto_redeem():
+    """Ask Polymarket to auto-redeem resolved positions, so winning outcome tokens
+    turn back into pUSD without the bot doing it per-trade."""
+    try:
+        result = await asyncio.to_thread(clob_trader.enable_auto_redeem)
+        log_message("Auto-redeem enabled" if result.get("ok")
+                    else f"Auto-redeem failed: {result.get('error')}")
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 
 @app.get("/health")
 async def health():
