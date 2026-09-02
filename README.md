@@ -22,7 +22,9 @@ position size set by a simple percent-of-balance or fixed-dollar risk. See
 
 ## Requirements
 
-- Python **3.11+**
+- Python **3.12+** — required, not preferred. `polymarket-apis` declares
+  `Requires-Python >=3.12`; on 3.11 pip ignores every published version and fails with
+  the confusing `Could not find a version ... (from versions: none)`.
 - pip (comes with Python)
 
 ## Local Run
