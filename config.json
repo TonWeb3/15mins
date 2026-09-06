@@ -1,6 +1,6 @@
 {
   "mode": "paper",
-  "paper_balance_usd": 1000.0,
+  "paper_balance_usd": 1100.0,
   "private_key": "",
   "live": {
     "max_slippage": 0.02

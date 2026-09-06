@@ -1,6 +1,34 @@
 {
-  "paper_balance": 1000.0,
+  "paper_balance": 1100.0,
   "active_trades": [],
-  "trade_history": [],
-  "last_trade_side": null
+  "trade_history": [
+    {
+      "market_id": "test_mkt_1",
+      "market_slug": "test-btc-15m-market",
+      "side": "UP",
+      "entry_price": 0.5,
+      "amount": 100.0,
+      "shares": 200.0,
+      "entry_time": "2026-09-06T09:01:09.268321",
+      "status": "CLOSED",
+      "settlement_price": null,
+      "profit_loss": 100.0,
+      "strike_price": 80000.0,
+      "strike_source": "chainlink_ws",
+      "window_start_ms": null,
+      "open_reason": "ev_entry",
+      "close_price": 80500.0,
+      "end_ts": 100.0,
+      "mode": "paper",
+      "last_price": 80500.0,
+      "last_api_check": 1788685269.269898,
+      "open_price": 80000.0,
+      "resolution": "polymarket_settled",
+      "exit_reason": "settled",
+      "exit_time": "2026-09-06T09:01:09.645754",
+      "settlement_price_at_expiry": 80500.0,
+      "winning_outcome": "Up"
+    }
+  ],
+  "last_trade_side": "UP"
 }
