@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(binance_kline_1m.start()),
         asyncio.create_task(binance_kline_5m.start()),
         asyncio.create_task(polymarket_ws_stream.start()),
+        asyncio.create_task(polymarket_clob_ws.start()),
         asyncio.create_task(chainlink_ws_stream.start()),
         asyncio.create_task(update_loop())
     ]
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI):
     binance_kline_1m.close()
     binance_kline_5m.close()
     polymarket_ws_stream.close()
+    polymarket_clob_ws.close()
     chainlink_ws_stream.close()
 
 app = FastAPI(title="Polymarket BTC 15m Assistant", lifespan=lifespan)
@@ -85,7 +87,7 @@ def save_state():
         }
         with open("state_data.json", "w") as f:
             json.dump(data_to_save, f, indent=2)
-            
+
         if os.path.exists("config.json"):
             with open("config.json", "r") as f:
                 cfg = json.load(f)
@@ -131,6 +133,7 @@ polymarket_ws_stream = ws_data.PolymarketChainlinkStream(
     ws_url=settings.POLYMARKET_LIVE_DATA_WS_URL,
     symbol_includes=get_ws_symbol_filter(settings.SYMBOL)
 )
+polymarket_clob_ws = ws_data.PolymarketClobMarketStream()
 chainlink_ws_stream = ws_data.ChainlinkPriceStream(aggregator=settings.get_aggregator(settings.SYMBOL))
 
 def get_candle_window_timing(window_minutes: int) -> Dict[str, float]:
@@ -198,20 +201,49 @@ async def fetch_polymarket_snapshot() -> Dict[str, Any]:
     if not up_token_id or not down_token_id:
         return {"ok": False, "reason": "missing_token_ids"}
 
-    try:
-        up_buy, down_buy, up_book, down_book = await asyncio.gather(
-            data.fetch_clob_price(up_token_id, "buy"),
-            data.fetch_clob_price(down_token_id, "buy"),
-            data.fetch_order_book(up_token_id),
-            data.fetch_order_book(down_token_id)
-        )
-        up_book_summary = data.summarize_order_book(up_book)
-        down_book_summary = data.summarize_order_book(down_book)
-    except:
-        up_buy = None
-        down_buy = None
-        up_book_summary = {"bestBid": None, "bestAsk": None, "spread": None, "bidLiquidity": None, "askLiquidity": None}
-        down_book_summary = {"bestBid": None, "bestAsk": None, "spread": None, "bidLiquidity": None, "askLiquidity": None}
+    # Update active tokens in the WebSocket stream
+    polymarket_clob_ws.update_assets([up_token_id, down_token_id])
+
+    up_ws = polymarket_clob_ws.get_token_market(up_token_id)
+    down_ws = polymarket_clob_ws.get_token_market(down_token_id)
+
+    # Use WS best_ask if available, else fallback to REST
+    up_buy = up_ws.get("best_ask")
+    down_buy = down_ws.get("best_ask")
+
+    if up_buy is None or down_buy is None:
+        try:
+            up_rest_price, down_rest_price = await asyncio.gather(
+                data.fetch_clob_price(up_token_id, "buy") if up_buy is None else asyncio.sleep(0, result=up_buy),
+                data.fetch_clob_price(down_token_id, "buy") if down_buy is None else asyncio.sleep(0, result=down_buy)
+            )
+            if up_buy is None: up_buy = up_rest_price
+            if down_buy is None: down_buy = down_rest_price
+        except Exception:
+            pass
+
+    # Build orderbook summaries using WS orderbooks if available, fallback to REST
+    up_book_summary = None
+    down_book_summary = None
+
+    if up_ws.get("bids") or up_ws.get("asks"):
+        up_book_summary = data.summarize_order_book(up_ws)
+    if down_ws.get("bids") or down_ws.get("asks"):
+        down_book_summary = data.summarize_order_book(down_ws)
+
+    if not up_book_summary or not down_book_summary:
+        try:
+            up_book, down_book = await asyncio.gather(
+                data.fetch_order_book(up_token_id) if not up_book_summary else asyncio.sleep(0, result={}),
+                data.fetch_order_book(down_token_id) if not down_book_summary else asyncio.sleep(0, result={})
+            )
+            if not up_book_summary: up_book_summary = data.summarize_order_book(up_book)
+            if not down_book_summary: down_book_summary = data.summarize_order_book(down_book)
+        except Exception:
+            if not up_book_summary:
+                up_book_summary = {"bestBid": None, "bestAsk": up_buy, "spread": None, "bidLiquidity": None, "askLiquidity": None}
+            if not down_book_summary:
+                down_book_summary = {"bestBid": None, "bestAsk": down_buy, "spread": None, "bidLiquidity": None, "askLiquidity": None}
 
     return {
         "ok": True,

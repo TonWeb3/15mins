@@ -16,23 +16,30 @@ class BinanceTradeStream:
         self.closed = False
 
     async def start(self):
-        url = f"wss://stream.binance.com:9443/ws/{self.symbol}@trade"
+        endpoints = [
+            f"wss://data-stream.binance.vision/ws/{self.symbol}@trade",
+            f"wss://stream.binance.com:9443/ws/{self.symbol}@trade"
+        ]
+        endpoint_idx = 0
 
         while not self.closed:
+            url = endpoints[endpoint_idx % len(endpoints)]
+            endpoint_idx += 1
             try:
                 proxy = get_proxy_url_for(url)
                 async with aiohttp.ClientSession() as session:
                     async with session.ws_connect(url, proxy=proxy if proxy else None) as ws:
-                        print(f"Connected to Binance WS: {self.symbol}")
+                        print(f"Connected to Binance WS ({url}): {self.symbol}")
                         while not self.closed:
                             msg = await ws.receive()
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 data_msg = json.loads(msg.data)
-                                self._process_trade(float(data_msg.get("p")))
+                                if "p" in data_msg:
+                                    self._process_trade(float(data_msg.get("p")))
                             elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                                 break
             except Exception as e:
-                print(f"Binance trade WS failed: {e}")
+                print(f"Binance trade WS failed ({url}): {e}")
                 if not self.closed:
                     await asyncio.sleep(2)
 
@@ -58,34 +65,41 @@ class BinanceKlineStream:
         self.closed = False
 
     async def start(self):
-        url = f"wss://stream.binance.com:9443/ws/{self.symbol}@kline_{self.interval}"
+        endpoints = [
+            f"wss://data-stream.binance.vision/ws/{self.symbol}@kline_{self.interval}",
+            f"wss://stream.binance.com:9443/ws/{self.symbol}@kline_{self.interval}"
+        ]
+        endpoint_idx = 0
 
         while not self.closed:
+            url = endpoints[endpoint_idx % len(endpoints)]
+            endpoint_idx += 1
             try:
                 proxy = get_proxy_url_for(url)
                 async with aiohttp.ClientSession() as session:
                     async with session.ws_connect(url, proxy=proxy if proxy else None) as ws:
-                        print(f"Connected to Binance Kline WS: {self.symbol} {self.interval}")
+                        print(f"Connected to Binance Kline WS ({url}): {self.symbol} {self.interval}")
                         while not self.closed:
                             msg = await ws.receive()
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 data_msg = json.loads(msg.data)
                                 k = data_msg.get("k", {})
-                                candle = {
-                                    "openTime": int(k.get("t")),
-                                    "open": float(k.get("o")),
-                                    "high": float(k.get("h")),
-                                    "low": float(k.get("l")),
-                                    "close": float(k.get("c")),
-                                    "volume": float(k.get("v")),
-                                    "closeTime": int(k.get("T")),
-                                    "isClosed": k.get("x")
-                                }
-                                self._update_candle(candle)
+                                if k.get("t") is not None:
+                                    candle = {
+                                        "openTime": int(k.get("t")),
+                                        "open": float(k.get("o")),
+                                        "high": float(k.get("h")),
+                                        "low": float(k.get("l")),
+                                        "close": float(k.get("c")),
+                                        "volume": float(k.get("v")),
+                                        "closeTime": int(k.get("T")),
+                                        "isClosed": k.get("x")
+                                    }
+                                    self._update_candle(candle)
                             elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
                                 break
             except Exception as e:
-                print(f"Binance Kline WS failed: {e}")
+                print(f"Binance Kline WS failed ({url}): {e}")
                 if not self.closed:
                     await asyncio.sleep(5)
 
@@ -206,6 +220,102 @@ class PolymarketChainlinkStream:
 
     def get_last(self):
         return {"price": self.last_price, "updatedAt": self.last_updated_at, "source": "polymarket_ws"}
+
+    def close(self):
+        self.closed = True
+
+class PolymarketClobMarketStream:
+    """Real-time orderbook and price feed for active Polymarket tokens over CLOB Market WS."""
+    def __init__(self, ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"):
+        self.ws_url = ws_url
+        self.asset_ids: List[str] = []
+        self.books: Dict[str, Dict] = {} # asset_id -> {"bids": [...], "asks": [...], "best_bid": float, "best_ask": float}
+        self.last_ts: float = 0
+        self.closed = False
+        self._ws = None
+
+    def update_assets(self, asset_ids: List[str]):
+        new_ids = sorted(list(set(asset_ids)))
+        if new_ids != self.asset_ids:
+            self.asset_ids = new_ids
+            if self._ws and not self._ws.closed and self.asset_ids:
+                asyncio.create_task(self._subscribe(self._ws))
+
+    async def _subscribe(self, ws):
+        if not self.asset_ids:
+            return
+        sub_msg = {
+            "assets_ids": self.asset_ids,
+            "type": "market"
+        }
+        try:
+            await ws.send_json(sub_msg)
+            print(f"Subscribed to Polymarket CLOB Market WS for tokens: {self.asset_ids}")
+        except Exception as e:
+            print(f"Failed to subscribe to CLOB market WS: {e}")
+
+    async def start(self):
+        while not self.closed:
+            try:
+                proxy = get_proxy_url_for(self.ws_url)
+                async with aiohttp.ClientSession() as session:
+                    async with session.ws_connect(self.ws_url, proxy=proxy if proxy else None) as ws:
+                        self._ws = ws
+                        print(f"Connected to Polymarket CLOB Market WS: {self.ws_url}")
+                        await self._subscribe(ws)
+
+                        while not self.closed:
+                            msg = await ws.receive()
+                            if msg.type == aiohttp.WSMsgType.TEXT:
+                                data = json.loads(msg.data)
+                                self._process_msg(data)
+                            elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
+                                break
+            except Exception as e:
+                print(f"Polymarket CLOB Market WS error: {e}")
+                if not self.closed:
+                    await asyncio.sleep(2)
+
+    def _process_msg(self, data):
+        self.last_ts = time.time()
+        # Full book snapshot (list)
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and "asset_id" in item:
+                    aid = str(item["asset_id"])
+                    bids = item.get("bids", [])
+                    asks = item.get("asks", [])
+                    best_bid = float(bids[0]["price"]) if bids and isinstance(bids, list) and len(bids) > 0 and "price" in bids[0] else None
+                    best_ask = float(asks[0]["price"]) if asks and isinstance(asks, list) and len(asks) > 0 and "price" in asks[0] else None
+                    self.books[aid] = {
+                        "bids": bids,
+                        "asks": asks,
+                        "best_bid": best_bid,
+                        "best_ask": best_ask,
+                        "updated_at": self.last_ts
+                    }
+        # Price / book delta updates
+        elif isinstance(data, dict):
+            price_changes = data.get("price_changes", [])
+            for pc in price_changes:
+                aid = str(pc.get("asset_id"))
+                if not aid:
+                    continue
+                book = self.books.setdefault(aid, {"bids": [], "asks": [], "best_bid": None, "best_ask": None, "updated_at": self.last_ts})
+                book["updated_at"] = self.last_ts
+                if pc.get("best_bid") is not None:
+                    try:
+                        book["best_bid"] = float(pc["best_bid"])
+                    except (TypeError, ValueError):
+                        pass
+                if pc.get("best_ask") is not None:
+                    try:
+                        book["best_ask"] = float(pc["best_ask"])
+                    except (TypeError, ValueError):
+                        pass
+
+    def get_token_market(self, asset_id: str) -> Dict:
+        return self.books.get(str(asset_id), {})
 
     def close(self):
         self.closed = True
