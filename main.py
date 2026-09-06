@@ -508,10 +508,11 @@ def mark_window_open(start_ms: int, window_ms: int, current_price: Optional[floa
     # is no longer the open; NEGATIVE means eventStartTime is still in the future (the
     # market hasn't begun) and latching would freeze a pre-open price as the strike.
     since_start = time.time() * 1000 - start_ms
-    if (win["chainlink"] is None and win["genuine"] and current_price
+    if (win["chainlink"] is None and current_price
             and 0 <= since_start < MARK_CAPTURE_WINDOW_MS):
         win["chainlink"] = current_price
         win["binance"] = spot_price
+        win["genuine"] = True
         log_message(f"Window open marked @ eventStartTime: Chainlink {current_price:.2f} "
                     f"({price_source}) / Binance {spot_price if spot_price else '-'}")
     state["last_window_start"] = start_ms
