@@ -30,6 +30,10 @@
                         <div :class="data.prices?.chainlink ? 'bg-green-500' : 'bg-red-500'" class="w-2 h-2 rounded-full mr-1"></div>
                         <span class="text-gray-400">Poly WS</span>
                     </div>
+                    <div class="flex items-center" :title="'Order book source: ' + (data.prices?.book_source || 'unknown') + ' (amber = fell back to REST polling)'">
+                        <div :class="data.prices?.book_source === 'ws' ? 'bg-green-500' : (data.prices?.book_source ? 'bg-amber-500' : 'bg-red-500')" class="w-2 h-2 rounded-full mr-1"></div>
+                        <span class="text-gray-400">Book WS</span>
+                    </div>
                 </div>
                 <!-- Start / Stop trading -->
                 <button @click="running ? stopBot() : startBot()" :disabled="botBusy"
@@ -47,9 +51,19 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                     </svg>
                 </a>
+                <!-- Auto-withdraw status (only when enabled) -->
+                <span x-show="data.trading_state?.withdraw?.enabled"
+                      class="px-3 py-1 rounded-full font-bold uppercase text-[10px] sm:text-xs"
+                      :class="data.trading_state?.withdraw?.state === 'ARMED' ? 'bg-gray-700 text-emerald-400' : 'bg-amber-600 text-white'"
+                      :title="'Auto-withdraw: $' + (data.trading_state?.withdraw?.amount ?? '-') + ' once equity reaches $' + (data.trading_state?.withdraw?.trigger_balance ?? '-')"
+                      x-text="'⤓ ' + (data.trading_state?.withdraw?.state || '')"></span>
                 <span :class="data.trading_state?.mode === 'paper' ? 'bg-yellow-600' : 'bg-red-600'"
                       class="px-3 py-1 rounded-full font-bold uppercase text-[10px] sm:text-xs" x-text="data.trading_state?.mode"></span>
-                <span class="bg-gray-800 px-3 py-1 rounded text-gray-400 text-[10px] sm:text-xs" x-text="'Updated: ' + lastUpdate"></span>
+                <span class="bg-gray-800 px-3 py-1 rounded text-gray-400 text-[10px] sm:text-xs flex items-center gap-1.5"
+                      :title="live ? 'Live — the server pushes each update over a websocket' : 'Push socket down — falling back to 1s polling'">
+                    <span class="w-1.5 h-1.5 rounded-full" :class="live ? 'bg-green-500' : 'bg-amber-500'"></span>
+                    <span x-text="(live ? 'Live: ' : 'Polling: ') + lastUpdate"></span>
+                </span>
             </div>
         </header>
 
@@ -120,15 +134,43 @@
                         <span class="text-gray-400">RSI (14)</span>
                         <span :class="data.indicators?.rsi > 70 ? 'text-red-400' : (data.indicators?.rsi < 30 ? 'text-green-400' : 'text-white')" x-text="data.indicators?.rsi != null ? data.indicators.rsi.toFixed(2) : 'NaN'"></span>
                     </div>
-                    <div class="flex justify-between text-sm sm:text-base">
-                        <span class="text-gray-400">Heiken Ashi (1m)</span>
-                        <span :class="data.indicators?.heiken?.color === 'green' ? 'text-green-400' : (data.indicators?.heiken?.color === 'red' ? 'text-red-400' : 'text-gray-500')"
-                              x-text="data.indicators?.heiken?.count != null ? (data.indicators?.heiken?.color + ' x' + data.indicators?.heiken?.count) : 'NaN'"></span>
+                    <div class="flex justify-between text-sm sm:text-base"
+                         title="Directional confirmation: the 1m Heiken-Ashi colour must match the side being traded. The streak count is context only.">
+                        <span class="text-gray-400">Heiken Ashi (1m) <span class="text-[10px] text-gray-600 uppercase">confirms</span></span>
+                        <div class="flex flex-col items-end">
+                            <span :class="data.indicators?.heiken?.color === 'green' ? 'text-green-400' : (data.indicators?.heiken?.color === 'red' ? 'text-red-400' : 'text-gray-500')"
+                                  x-text="data.indicators?.heiken?.color ? data.indicators.heiken.color.toUpperCase() : '—'"></span>
+                            <span class="text-[10px] text-gray-500"
+                                  x-text="data.indicators?.heiken?.color ? (data.indicators.heiken.color === 'green' ? 'UP' : 'DOWN') + ' · x' + (data.indicators?.heiken?.count ?? '-') : 'no data'"></span>
+                        </div>
                     </div>
-                    <div class="flex justify-between text-sm sm:text-base">
-                        <span class="text-gray-400">Heiken Ashi (5m)</span>
-                        <span :class="data.indicators?.heiken_5m?.color === 'green' ? 'text-green-400' : (data.indicators?.heiken_5m?.color === 'red' ? 'text-red-400' : 'text-gray-500')"
-                              x-text="data.indicators?.heiken_5m?.count != null ? (data.indicators?.heiken_5m?.color + ' x' + data.indicators?.heiken_5m?.count) : 'NaN'"></span>
+                    <div class="flex justify-between text-sm sm:text-base"
+                         title="Directional confirmation: the 5m Heiken-Ashi colour must match the side being traded. The streak count is context only.">
+                        <span class="text-gray-400">Heiken Ashi (5m) <span class="text-[10px] text-gray-600 uppercase">confirms</span></span>
+                        <div class="flex flex-col items-end">
+                            <span :class="data.indicators?.heiken_5m?.color === 'green' ? 'text-green-400' : (data.indicators?.heiken_5m?.color === 'red' ? 'text-red-400' : 'text-gray-500')"
+                                  x-text="data.indicators?.heiken_5m?.color ? data.indicators.heiken_5m.color.toUpperCase() : '—'"></span>
+                            <span class="text-[10px] text-gray-500"
+                                  x-text="data.indicators?.heiken_5m?.color ? (data.indicators.heiken_5m.color === 'green' ? 'UP' : 'DOWN') + ' · x' + (data.indicators?.heiken_5m?.count ?? '-') : 'no data'"></span>
+                        </div>
+                    </div>
+                    <div class="flex justify-between text-[10px] border-t border-gray-700 pt-2">
+                        <span class="text-gray-500 uppercase tracking-wider">Timeframe alignment</span>
+                        <span :class="haAligned() === 'UP' ? 'text-green-400' : (haAligned() === 'DOWN' ? 'text-red-400' : 'text-amber-400')"
+                              x-text="haAligned() ? ('ALL THREE ' + haAligned()) : 'not aligned'"></span>
+                    </div>
+                    <div class="flex justify-between text-sm sm:text-base border-t border-gray-700 pt-3"
+                         :title="data.indicators?.heiken_15m?.detail || ''">
+                        <span class="text-gray-400">15m HA Shield <span class="text-[10px] text-gray-600 uppercase">parent</span></span>
+                        <div class="flex flex-col items-end">
+                            <span :class="data.indicators?.heiken_15m?.color === 'green' ? 'text-green-400' : (data.indicators?.heiken_15m?.color === 'red' ? 'text-red-400' : 'text-gray-500')"
+                                  x-text="data.indicators?.heiken_15m?.color ? data.indicators.heiken_15m.color.toUpperCase() : '—'"></span>
+                            <span class="text-[10px]"
+                                  :class="(data.indicators?.heiken_15m?.allow_up || data.indicators?.heiken_15m?.allow_down) ? 'text-gray-400' : 'text-amber-400'"
+                                  x-text="data.indicators?.heiken_15m?.allow_up ? 'UP permitted'
+                                          : (data.indicators?.heiken_15m?.allow_down ? 'DOWN permitted'
+                                          : 'both vetoed')"></span>
+                        </div>
                     </div>
                     <div class="flex justify-between text-sm sm:text-base">
                         <span class="text-gray-400">Fair Probability (15m Close)</span>
@@ -166,8 +208,8 @@
         <div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden mb-8">
             <div class="flex bg-gray-700 overflow-x-auto">
                 <button @click="tab = 'active'" :class="tab === 'active' ? 'bg-gray-800 text-blue-400' : 'text-gray-400 hover:text-white'" class="px-4 sm:px-6 py-3 font-bold uppercase text-[10px] sm:text-sm transition flex-shrink-0">Active Trades</button>
-                <button @click="tab = 'history'" :class="tab === 'history' ? 'bg-gray-800 text-blue-400' : 'text-gray-400 hover:text-white'" class="px-4 sm:px-6 py-3 font-bold uppercase text-[10px] sm:text-sm transition flex-shrink-0">Closed Trades</button>
-                <button @click="tab = 'logs'" :class="tab === 'logs' ? 'bg-gray-800 text-blue-400' : 'text-gray-400 hover:text-white'" class="px-4 sm:px-6 py-3 font-bold uppercase text-[10px] sm:text-sm transition flex-shrink-0">Console Log</button>
+                <button @click="tab = 'history'; loadHistory()" :class="tab === 'history' ? 'bg-gray-800 text-blue-400' : 'text-gray-400 hover:text-white'" class="px-4 sm:px-6 py-3 font-bold uppercase text-[10px] sm:text-sm transition flex-shrink-0">Closed Trades</button>
+                <button @click="tab = 'logs'; refreshLogs()" :class="tab === 'logs' ? 'bg-gray-800 text-blue-400' : 'text-gray-400 hover:text-white'" class="px-4 sm:px-6 py-3 font-bold uppercase text-[10px] sm:text-sm transition flex-shrink-0">Console Log</button>
             </div>
 
             <div class="p-4 sm:p-6">
@@ -339,30 +381,67 @@
                 running: false,
                 botBusy: false,
                 suppressSyncUntil: 0,
+                live: false,          // true while the push socket is connected
+                lastLogSeq: -1,
+                wsRetry: 0,
                 init() {
-                    this.refresh();
+                    this.refresh();          // paint immediately, don't wait for the socket
                     this.loadFiles();
-                    setInterval(() => this.refresh(), 1000);
-                    setInterval(() => this.refreshLogs(), 2000);
+                    this.connectWs();
+                    // Polling is now a FALLBACK, not the normal path: it only runs while
+                    // the push socket is down, so the two never fight over the snapshot.
+                    setInterval(() => { if (!this.live) this.refresh(); }, 1000);
+                    setInterval(() => { if (!this.live) this.refreshLogs(); }, 2000);
                     // File sizes/rows grow slowly - a 30s refresh is plenty.
                     setInterval(() => { if (this.tab === 'logs') this.loadFiles(); }, 30000);
+                },
+                // Server-pushed snapshots. Falls back to polling on any failure and
+                // reconnects with a backoff, so the dashboard degrades rather than dies.
+                connectWs() {
+                    let ws;
+                    try {
+                        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+                        ws = new WebSocket(proto + '//' + location.host + '/ws');
+                    } catch (e) { this.scheduleReconnect(); return; }
+
+                    ws.onopen = () => { this.live = true; this.wsRetry = 0; };
+                    ws.onmessage = (ev) => {
+                        try { this.applySnapshot(JSON.parse(ev.data)); }
+                        catch (e) { /* ignore a malformed frame; the next one corrects it */ }
+                    };
+                    ws.onclose = () => { this.live = false; this.scheduleReconnect(); };
+                    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+                },
+                scheduleReconnect() {
+                    // 1s, 2s, 4s … capped at 15s, so a restarted server is picked up
+                    // quickly without hammering an unreachable one.
+                    const delay = Math.min(15000, 1000 * Math.pow(2, this.wsRetry++));
+                    setTimeout(() => this.connectWs(), delay);
+                },
+                applySnapshot(data) {
+                    this.data = data;
+                    this.lastUpdate = new Date().toLocaleTimeString();
+                    // Keep Start/Stop in sync with the server, but not while a click is
+                    // in flight or just after one.
+                    if (!this.botBusy && Date.now() > this.suppressSyncUntil && data.trading_state?.running != null) {
+                        this.running = !!data.trading_state.running;
+                    }
+                    // Logs are not carried in the frame — the sequence number says when
+                    // to go and get them, so a 100-line buffer isn't resent every tick.
+                    if (data.log_seq != null && data.log_seq !== this.lastLogSeq) {
+                        this.lastLogSeq = data.log_seq;
+                        if (this.tab === 'logs') this.refreshLogs();
+                    }
+                    if (this.tab === 'history') this.loadHistory();
+                },
+                async loadHistory() {
+                    try { this.tradeHistory = (await (await fetch('/history')).json()).reverse(); }
+                    catch (e) { /* keep what is rendered */ }
                 },
                 async refresh() {
                     try {
                         const response = await fetch('/api/latest');
-                        this.data = await response.json();
-                        this.lastUpdate = new Date().toLocaleTimeString();
-                        // Keep Start/Stop in sync with the server, but not while a click is
-                        // in flight or just after one (the server's flag lags ~1s).
-                        if (!this.botBusy && Date.now() > this.suppressSyncUntil && this.data.trading_state?.running != null) {
-                            this.running = !!this.data.trading_state.running;
-                        }
-
-                        if (this.tab === 'history') {
-                            const hRes = await fetch('/history');
-                            const history = await hRes.json();
-                            this.tradeHistory = history.reverse();
-                        }
+                        this.applySnapshot(await response.json());
                     } catch (e) {
                         console.error("Refresh failed", e);
                     }
@@ -451,12 +530,20 @@
                     URL.revokeObjectURL(url);
                 },
                 async refreshLogs() {
-                    if (this.tab !== 'logs') return;
                     try {
                         const response = await fetch('/api/logs');
                         const logs = await response.json();
                         this.logs = logs.reverse();
                     } catch (e) {}
+                },
+                // True direction only when the 15m shield permits it AND both faster
+                // Heiken-Ashi colours agree — the same test the engine applies.
+                haAligned() {
+                    const i = this.data.indicators || {};
+                    const c1 = i.heiken?.color, c5 = i.heiken_5m?.color, h15 = i.heiken_15m || {};
+                    if (h15.allow_up && c1 === 'green' && c5 === 'green') return 'UP';
+                    if (h15.allow_down && c1 === 'red' && c5 === 'red') return 'DOWN';
+                    return null;
                 },
                 formatTime(mins) {
                     if (!mins && mins !== 0) return '--:--';

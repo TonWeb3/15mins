@@ -3,15 +3,30 @@
   "paper_balance_usd": 1000.0,
   "private_key": "",
   "live": {
-    "max_slippage": 0.02
+    "max_slippage": 0.02,
+    "exit_max_retries": 3
   },
   "relayer": {
     "api_key": ""
+  },
+  "capital_extractor": {
+    "enabled": false,
+    "trigger_balance": 2000,
+    "withdraw_amount": 1000,
+    "withdraw_address": "",
+    "auto_resume_after_withdrawal": true,
+    "resume_after": "submitted"
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": ""
   },
   "polymarket": {
     "gamma_base_url": "https://gamma-api.polymarket.com",
     "clob_base_url": "https://clob.polymarket.com",
     "live_ws_url": "wss://ws-live-data.polymarket.com",
+    "clob_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+    "max_book_age_s": 15,
     "series_id": "10192",
     "series_slug": "btc-up-or-down-15m",
     "auto_select_latest": true,
@@ -29,7 +44,8 @@
   "ev": {
     "ev_threshold": 0.04,
     "min_prob": 0.55,
-    "min_book_liquidity_usd": 20
+    "min_book_liquidity_usd": 20,
+    "min_seconds_left": 30
   },
   "settlement": {
     "authoritative_settle_wait_s": 90

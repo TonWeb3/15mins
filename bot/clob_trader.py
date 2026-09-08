@@ -348,6 +348,53 @@ class ClobTrader:
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
+    # ── withdrawal (auto capital extractor) ─────────────────────────────────────
+    def withdraw_pusd(self, recipient: str, amount: float) -> Dict[str, Any]:
+        """Transfer `amount` pUSD from the funded (deposit) wallet to `recipient`.
+        Gasless via the relayer. Used by the auto-withdrawal state machine."""
+        if not recipient:
+            return {"ok": False, "error": "missing_withdraw_address"}
+        if amount is None or float(amount) <= 0:
+            return {"ok": False, "error": "invalid_amount"}
+        if not self.ensure_ready():
+            return {"ok": False, "error": self.last_error or "client_not_ready"}
+        if not hasattr(self.gasless, "transfer_pusd"):
+            return {"ok": False, "error": "withdraw_unsupported_by_client"}
+        try:
+            try:
+                from eth_utils import to_checksum_address
+                addr = to_checksum_address(recipient)
+            except Exception:
+                addr = recipient
+            receipt = self.gasless.transfer_pusd(addr, round(float(amount), 2))
+            tx = None
+            try:
+                data = receipt.model_dump() if hasattr(receipt, "model_dump") else dict(receipt)
+                tx = data.get("transaction_hash") or data.get("transactionHash") or data.get("hash")
+            except Exception:
+                tx = str(receipt) if receipt is not None else None
+            return {"ok": True, "tx": tx, "amount": round(float(amount), 2), "recipient": addr}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def is_tx_confirmed(self, tx_hash: str) -> Optional[bool]:
+        """True/False once the receipt is readable, None while still unknown. Used by
+        the capital extractor when `resume_after` is set to `confirmed`."""
+        if not tx_hash:
+            return None
+        try:
+            from web3 import Web3
+            rpc = settings.alchemy_rpc_url() or settings.POLYGON_RPC_URL
+            if not rpc:
+                return None
+            w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 6.0}))
+            receipt = w3.eth.get_transaction_receipt(tx_hash)
+            if receipt is None:
+                return None
+            return bool(receipt.get("status", 0) == 1)
+        except Exception:
+            return None
+
     # ── diagnostics / balance ───────────────────────────────────────────────────
     def get_eoa_address(self) -> Optional[str]:
         """The EOA address derived from PRIVATE_KEY — the wallet you control (the

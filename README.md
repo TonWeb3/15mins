@@ -1,23 +1,70 @@
 # Polymarket BTC 15m Assistant (Python FastAPI)
 
-A real-time trading assistant for Polymarket **"Bitcoin Up or Down" 15-minute** markets, ported to Python and FastAPI.
-
-> **📖 Full reference: [`documentation.md`](documentation.md)** — the strategy, the
-> strike mechanism, settlement, config, API and known limits, in detail. This README is
-> the quick start.
+A real-time trading assistant for Polymarket **"Bitcoin Up or Down" 15-minute**
+markets, ported to Python and FastAPI.
 
 It runs a **latency-arbitrage** strategy: a fast closed-form fair probability from
 Binance spot vs Polymarket's (possibly stale) implied price, traded on the gap, with
-position size set by a simple percent-of-balance or fixed-dollar risk. See
-[`strategy.md`](strategy.md) for the full rationale.
+position size set by a simple percent-of-balance or fixed-dollar risk.
+
+## The strategy in one screen
+
+The model has **no predictive edge** over the trivial "is spot already above the 15m
+open?" baseline — that signal is fully priced by the market. The only edge left is
+**latency**: acting on a Binance spot move before Polymarket's thin book reprices. So
+the entry decision is deliberately just *fair probability vs the market's ask*, and
+every indicator survives only as a filter that can **block** a trade, never as one
+that creates or reweights a signal.
+
+The decision runs in four stages, in this order:
+
+1. **15m Heiken-Ashi parent shield** — macro permission. The last **completed** 15m
+   Heiken-Ashi candle decides whether a direction may be traded at all: a green candle
+   permits UP, a red one permits DOWN, a counter wick larger than 15% of the body
+   blocks its own side, and prominent wicks on *both* sides (each > 40% of the range)
+   veto both. Fails closed — no verdict means no trade. Only the completed candle is
+   read, because a developing one's wicks change every tick and would flip the filter's
+   own verdict mid-window.
+2. **1m + 5m Heiken-Ashi direction** — micro confirmation. Both faster Heiken-Ashi
+   candles must point the **same way** as the side being traded: green confirms UP,
+   red confirms DOWN. Together with the shield that is a three-timeframe alignment —
+   15m permits the direction, 5m and 1m confirm the move is running right now. These
+   two read the **developing** candle on purpose (the 1m turning green *is* the move
+   being raced); only the 15m waits for a close. Fails closed on an unknown colour.
+3. **RSI(14) extremes veto** — don't buy UP above 70 or DOWN below 30. This is the one
+   counter-trend check in the stack; everything above it is confluence, so without it
+   nothing can stop a fully-aligned signal.
+4. **EV gate** — enter only when `fair_prob − ask_price` clears `ev_threshold`, the
+   chosen side's probability clears `min_prob`, and at least `min_seconds_left`
+   remains in the window.
+
+The Heiken-Ashi and RSI thresholds are **hardcoded in
+[`bot/indicators.py`](bot/indicators.py) and [`bot/engines.py`](bot/engines.py)** on
+purpose — they are part of the strategy's definition, not per-run knobs. Only the EV
+gate is configurable.
+
+> **The filters are restrictive by design.** The EV engine picks its side first, then
+> asks the shield about *that* side only — it never falls back to the second-best one,
+> and the 1m and 5m must then both agree with it. Long stretches of "NO TRADE" with an
+> `ha15_*` or `ha1m_*` / `ha5m_*` reason are the filters working, not a fault. Every
+> tick's reason code is written to `logs/signals.csv`.
+>
+> Note this is **pro-trend**. An earlier version vetoed a side once its Heiken-Ashi
+> streak reached 6 bars, on a "don't chase" rationale; that withheld the trade exactly
+> when the timeframes agreed most strongly, which on a persistence model is the best
+> setup rather than the worst. A long green streak now supports UP.
 
 ## Features
 
-- Real-time Web Dashboard (FastAPI + Jinja2 + Alpine.js)
+- Real-time Web Dashboard (FastAPI + Jinja2 + Alpine.js), pushed over a websocket
 - Fast fair-probability model (closed-form GBM) + EV entry engine
-- Veto filters: RSI extremes, Heiken-Ashi exhaustion
+- Three-layer filtering: 15m Heiken-Ashi parent shield, 1m + 5m Heiken-Ashi
+  directional confirmation, RSI extremes veto
+- Event-driven entries: the decision re-runs on a Binance trade tick or a CLOB book
+  update, not on a 1-second timer
 - Trade Execution: Paper Trading simulation vs Live Mode toggle
-- Data Sources: Binance, Polymarket (Gamma/CLOB), Chainlink (WebSocket + RPC)
+- Data Sources: Binance (trades + klines), Polymarket (Gamma / CLOB REST + book
+  websocket), Chainlink (WebSocket + RPC)
 - Proxy Support: Global HTTP/HTTPS/SOCKS proxy configuration
 
 ## Requirements
@@ -46,9 +93,17 @@ tuned in the `ev` block:
 "ev": {
   "ev_threshold": 0.04,          // enter only when fair prob − share price ≥ this (the edge gate)
   "min_prob": 0.55,              // never bet near-coinflips even if EV looks positive
-  "min_book_liquidity_usd": 20.0 // skip if the ask side can't absorb the stake
+  "min_book_liquidity_usd": 20.0, // skip if the ask side can't absorb the stake
+  "min_seconds_left": 30          // stop entering this close to expiry
 }
 ```
+
+The fair-probability horizon is **continuous**: sigma and drift are normalised to
+per-minute units and the model scales by `sqrt(minutes_left)`, so conviction tightens
+smoothly as the window runs down rather than in 5-minute steps. That makes the model
+sharp in the last minutes, which is why `min_seconds_left` exists — near the close EV
+against a stale quote looks enormous, but a Fill-Or-Kill order into a closing book is
+the least reliable fill of the window.
 
 All of these are also editable live on the **Settings** page.
 
@@ -60,6 +115,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 Access the dashboard at `http://localhost:8000`.
 
+> Running `python main.py` directly instead starts uvicorn on port **8080**.
+
 ## Docker
 
 ```bash
@@ -69,18 +126,18 @@ docker run -p 8000:8000 polymarket-assistant
 
 ## Deployment on Render
 
-If you are seeing errors related to Node.js or `npm run start`, it is because Render is auto-detecting the old environment. **You must manually set the runtime to Python.**
+If you are seeing errors related to Node.js or `npm run start`, it is because Render is
+auto-detecting the old environment. **You must manually set the runtime to Python.**
 
-### Recommended: Use `render.yaml`
-The repository includes a `render.yaml`. When creating a new blueprint on Render, it will automatically set the correct environment.
-
-### Manual Setup
 1. Create a **Web Service** on Render.
 2. Under **Runtime**, explicitly select **Python 3**.
 3. Set the following commands:
    - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port 8000`
+   - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 4. Add any necessary environment variables (optional).
+
+Keep the worker count at **1**. The bot holds all its state in memory in one event
+loop, so a second worker would run a second independent bot against the same wallet.
 
 ## Live Trading
 
@@ -102,6 +159,7 @@ whichever actually holds **pUSD**.
 4. **Deposit pUSD** to that wallet through Polymarket.
 5. Click **Setup Wallet (gasless)** to deploy + approve it. Once per fresh wallet.
 6. *(Optional)* **Enable Auto-Redeem** so wins convert back to pUSD by themselves.
+7. *(Optional)* **Auto-Withdrawal** (Settings → Capital Extractor) — see below.
 
 Orders are **slippage-capped**: the limit is the quote plus `CLOB_MAX_SLIPPAGE`
 (default 2¢), so if the book moves away the order is killed rather than filled badly. A
@@ -110,6 +168,25 @@ fill is only recorded when it is positively confirmed, and the trade is stamped 
 pUSD balance (refreshed every 30s). Order failures appear in the Console Log.
 
 **Press Start on the dashboard** — the bot does not trade until you do.
+
+### Auto-Withdrawal (Capital Extractor)
+
+Live mode only, off by default. Once **equity** (cash + the value of any open position)
+reaches `capital_extractor.trigger_balance`, the bot:
+
+1. pauses new entries,
+2. sells any open position into the bid to go flat,
+3. withdraws `withdraw_amount` of pUSD, gasless, to `withdraw_address` (blank = your own
+   key/seed EOA),
+4. resumes at the **next** 15m market — or stops entirely if
+   `auto_resume_after_withdrawal` is off.
+
+`resume_after` chooses whether to resume as soon as the transaction is `submitted` or
+to wait up to 3 minutes for it to be `confirmed` on-chain.
+
+Add a **Telegram** bot token (Settings → Telegram Alerts) to be alerted each time one
+completes. Recipients subscribe themselves by sending the bot `/start` — there are no
+chat IDs to copy by hand — and leave with `/stop`.
 
 ## Safety
 

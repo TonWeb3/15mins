@@ -17,6 +17,25 @@ class Settings(BaseSettings):
     CLOB_MAX_SLIPPAGE: float = 0.02  # marketable-limit buffer above the quote (probability units)
     RELAYER_API_KEY: str = ""        # Polymarket relayer API key (sponsors gasless on-chain setup)
     ALCHEMY_API_KEY: str = ""        # optional: dedicated Polygon RPC for chain reads
+    EXIT_MAX_RETRIES: int = 3        # bounded retries for a failed early-exit sell
+
+    # ── Auto-withdrawal (capital extractor) ─────────────────────────────────────
+    # LIVE mode only. Once equity (cash + open position value) reaches the trigger,
+    # pause entries, close any open trade, withdraw AMOUNT of pUSD to your own wallet
+    # (the key/seed EOA unless an address is set) and auto-resume next window.
+    AUTO_WITHDRAW_ENABLED: bool = False
+    WITHDRAW_TRIGGER_BALANCE: float = 2000.0  # withdraw once equity reaches this
+    WITHDRAW_AMOUNT: float = 1000.0           # amount of pUSD to withdraw each time
+    WITHDRAW_ADDRESS: str = ""                # destination (blank = your own key/seed EOA)
+    WITHDRAW_AUTO_RESUME: bool = True         # resume trading after the withdrawal
+    WITHDRAW_RESUME_AFTER: str = "submitted"  # "submitted" or "confirmed"
+
+    # ── Telegram alerts ─────────────────────────────────────────────────────────
+    # When enabled, a message is broadcast every time a withdrawal completes. Anyone
+    # who sends the bot /start (or any message) is saved to telegram_subscribers.json
+    # and receives every alert — no chat IDs to copy by hand.
+    TELEGRAM_ENABLED: bool = False
+    TELEGRAM_BOT_TOKEN: str = ""   # from @BotFather
 
     SYMBOL: str = "BTCUSDT"
     BINANCE_BASE_URL: str = "https://api.binance.com"
@@ -36,6 +55,10 @@ class Settings(BaseSettings):
     EV_THRESHOLD: float = 0.04          # require >= this expected value per $1 share (after price)
     MIN_PROB_EV: float = 0.55           # don't bet near-coinflips even if EV looks positive
     MIN_BOOK_LIQUIDITY_USD: float = 20.0  # skip if the ask side can't absorb the stake
+    # Near expiry the model is near-certain, so EV vs any stale quote looks huge — but a
+    # FOK order into a closing book is an unreliable fill. Stop entering this many
+    # seconds before the window ends (900s window, so 30s = the last 3.3%).
+    MIN_SECONDS_LEFT: float = 30.0
 
     # After a window expires, wait this long for Polymarket to publish its OFFICIAL
     # outcome before falling back to our own close-vs-open comparison. Without this the
@@ -48,6 +71,10 @@ class Settings(BaseSettings):
     FLIP_MIN_MINUTES_LEFT: float = 9.0  # and at least this much time left in the window
 
     RSI_PERIOD: int = 14
+    # NOTE: the Heiken-Ashi layers have no settings here on purpose. Like the RSI
+    # bounds they are part of the strategy's definition, not per-run knobs — the 15m
+    # shield's thresholds live in bot/indicators.py and the 1m/5m direction rule in
+    # bot/engines.py.
 
     # Polymarket
     POLYMARKET_SLUG: str = os.getenv("POLYMARKET_SLUG", "")
@@ -55,6 +82,11 @@ class Settings(BaseSettings):
     POLYMARKET_SERIES_SLUG: str = os.getenv("POLYMARKET_SERIES_SLUG", "btc-up-or-down-15m")
     POLYMARKET_AUTO_SELECT_LATEST: bool = os.getenv("POLYMARKET_AUTO_SELECT_LATEST", "true").lower() == "true"
     POLYMARKET_LIVE_DATA_WS_URL: str = os.getenv("POLYMARKET_LIVE_WS_URL", "wss://ws-live-data.polymarket.com")
+    # CLOB market websocket — live order books for the active tokens, replacing the
+    # per-tick REST /book + /price poll. Set MAX_BOOK_AGE_S to 0 to disable the WS book
+    # entirely and go back to pure REST.
+    POLYMARKET_CLOB_WS_URL: str = os.getenv("POLYMARKET_CLOB_WS_URL", "wss://ws-subscriptions-clob.polymarket.com/ws/market")
+    MAX_BOOK_AGE_S: float = 15.0   # older than this => distrust the socket, use REST
     POLYMARKET_UP_LABEL: str = os.getenv("POLYMARKET_UP_LABEL", "Up")
     POLYMARKET_DOWN_LABEL: str = os.getenv("POLYMARKET_DOWN_LABEL", "Down")
 
@@ -127,12 +159,29 @@ def load_settings():
             if "live" in config_data:
                 live = config_data["live"]
                 if "max_slippage" in live: base_settings.CLOB_MAX_SLIPPAGE = float(live["max_slippage"])
+                if "exit_max_retries" in live: base_settings.EXIT_MAX_RETRIES = int(live["exit_max_retries"])
+
+            if "capital_extractor" in config_data:
+                ce = config_data["capital_extractor"]
+                if "enabled" in ce: base_settings.AUTO_WITHDRAW_ENABLED = bool(ce["enabled"])
+                if "trigger_balance" in ce: base_settings.WITHDRAW_TRIGGER_BALANCE = float(ce["trigger_balance"])
+                if "withdraw_amount" in ce: base_settings.WITHDRAW_AMOUNT = float(ce["withdraw_amount"])
+                if "withdraw_address" in ce: base_settings.WITHDRAW_ADDRESS = ce["withdraw_address"]
+                if "auto_resume_after_withdrawal" in ce: base_settings.WITHDRAW_AUTO_RESUME = bool(ce["auto_resume_after_withdrawal"])
+                if "resume_after" in ce: base_settings.WITHDRAW_RESUME_AFTER = ce["resume_after"]
+
+            if "telegram" in config_data:
+                tg = config_data["telegram"]
+                if "enabled" in tg: base_settings.TELEGRAM_ENABLED = bool(tg["enabled"])
+                if "bot_token" in tg: base_settings.TELEGRAM_BOT_TOKEN = tg["bot_token"]
 
             if "polymarket" in config_data:
                 poly = config_data["polymarket"]
                 if "gamma_base_url" in poly: base_settings.GAMMA_BASE_URL = poly["gamma_base_url"]
                 if "clob_base_url" in poly: base_settings.CLOB_BASE_URL = poly["clob_base_url"]
                 if "live_ws_url" in poly: base_settings.POLYMARKET_LIVE_DATA_WS_URL = poly["live_ws_url"]
+                if "clob_ws_url" in poly: base_settings.POLYMARKET_CLOB_WS_URL = poly["clob_ws_url"]
+                if "max_book_age_s" in poly: base_settings.MAX_BOOK_AGE_S = float(poly["max_book_age_s"])
                 if "series_id" in poly: base_settings.POLYMARKET_SERIES_ID = poly["series_id"]
                 if "series_slug" in poly: base_settings.POLYMARKET_SERIES_SLUG = poly["series_slug"]
                 if "auto_select_latest" in poly: base_settings.POLYMARKET_AUTO_SELECT_LATEST = poly["auto_select_latest"]
@@ -153,6 +202,7 @@ def load_settings():
                 if "ev_threshold" in ev: base_settings.EV_THRESHOLD = float(ev["ev_threshold"])
                 if "min_prob" in ev: base_settings.MIN_PROB_EV = float(ev["min_prob"])
                 if "min_book_liquidity_usd" in ev: base_settings.MIN_BOOK_LIQUIDITY_USD = float(ev["min_book_liquidity_usd"])
+                if "min_seconds_left" in ev: base_settings.MIN_SECONDS_LEFT = float(ev["min_seconds_left"])
 
             if "settlement" in config_data:
                 st = config_data["settlement"]

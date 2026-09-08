@@ -89,6 +89,11 @@
                         <input type="number" step="0.01" min="0.5" max="0.99" x-model.number="form.ev.min_prob" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
                         <p class="text-[10px] text-gray-500 mt-2 italic">Don't bet near-coinflips even if EV looks positive (e.g. 0.55).</p>
                     </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Min Seconds Left</label>
+                        <input type="number" step="1" min="0" max="600" x-model.number="form.ev.min_seconds_left" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Stop entering this close to expiry (e.g. 30). Near the close the model is near-certain and EV looks huge, but a Fill-Or-Kill into a closing book is the least reliable fill of the window.</p>
+                    </div>
                 </div>
 
                 <div class="p-4 bg-gray-900/50 rounded-lg border border-gray-700">
@@ -108,6 +113,96 @@
                     </div>
                     <p class="text-[10px] text-gray-500 mt-2 italic">When on, an open position is sold and reversed if the opposite side clears the conviction and time thresholds (sells into the book in live mode).</p>
                 </div>
+            </div>
+
+            <!-- Auto-withdrawal (capital extractor) -->
+            <div class="bg-gray-800 p-5 sm:p-6 rounded-lg shadow-lg">
+                <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Auto-Withdrawal (Capital Extractor)</h2>
+                <label class="flex items-center gap-2 mb-4">
+                    <input type="checkbox" x-model="form.capital_extractor.enabled" class="w-4 h-4">
+                    <span class="text-sm font-bold text-emerald-400 uppercase">Enable auto-withdrawal</span>
+                </label>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6" :class="form.capital_extractor.enabled ? '' : 'opacity-50 pointer-events-none'">
+                    <div>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Trigger Balance ($)</label>
+                        <input type="number" step="1" min="0" x-model.number="form.capital_extractor.trigger_balance" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Withdraw once <strong>equity</strong> (cash + any open position) reaches this (e.g. 2000).</p>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Withdraw Amount ($)</label>
+                        <input type="number" step="1" min="0" x-model.number="form.capital_extractor.withdraw_amount" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Amount of pUSD to withdraw each time (e.g. 1000 = half of 2000).</p>
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Withdraw To (destination address)</label>
+                        <input type="text" x-model="form.capital_extractor.withdraw_address" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="0x... wallet that receives the pUSD (blank = your own key/seed wallet)">
+                        <p class="text-[10px] text-gray-500 mt-2 italic">The pUSD is sent here (gasless). Leave blank to send to <strong>your own wallet</strong> (the key/seed EOA). Double-check the address — withdrawals move real funds and cannot be undone.</p>
+                    </div>
+                    <div>
+                        <label class="flex items-center gap-2 mt-1">
+                            <input type="checkbox" x-model="form.capital_extractor.auto_resume_after_withdrawal" class="w-4 h-4">
+                            <span class="text-sm text-gray-300">Auto-resume trading after withdrawal</span>
+                        </label>
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Off = the bot stops entirely once the withdrawal is done.</p>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Resume After</label>
+                        <select x-model="form.capital_extractor.resume_after" class="w-full bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition">
+                            <option value="submitted">Transaction submitted (faster)</option>
+                            <option value="confirmed">Confirmed on-chain (safer)</option>
+                        </select>
+                        <p class="text-[10px] text-gray-500 mt-2 italic">"Confirmed" waits for the receipt, up to 3 minutes, before resuming.</p>
+                    </div>
+                </div>
+                <p class="text-[10px] text-gray-500 mt-3 italic"><strong>Live mode only.</strong> When equity ≥ trigger: pause new entries → sell any open position at the bid to go flat → withdraw the amount → resume at the next 15m market.</p>
+            </div>
+
+            <!-- Telegram alerts -->
+            <div class="bg-gray-800 p-5 sm:p-6 rounded-lg shadow-lg">
+                <h2 class="text-lg sm:text-xl font-bold mb-4 border-b border-gray-700 pb-2">Telegram Alerts</h2>
+                <label class="flex items-center gap-2 mb-4">
+                    <input type="checkbox" x-model="form.telegram.enabled" class="w-4 h-4">
+                    <span class="text-sm font-bold text-sky-400 uppercase">Send Telegram alerts on withdrawal</span>
+                </label>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6" :class="form.telegram.enabled ? '' : 'opacity-50 pointer-events-none'">
+                    <div class="md:col-span-2">
+                        <label class="block text-gray-400 text-xs sm:text-sm mb-2 uppercase font-bold tracking-wider">Bot Token</label>
+                        <div class="flex flex-col sm:flex-row gap-2">
+                            <input type="password" x-model="form.telegram.bot_token" class="flex-1 bg-gray-700 border-none rounded-lg p-3 text-white focus:ring-2 focus:ring-blue-500 transition" placeholder="123456:ABC-DEF... (from @BotFather)">
+                            <button type="button" @click="testTelegram" :disabled="tgBusy"
+                                    class="bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold py-3 px-5 rounded-lg transition text-sm whitespace-nowrap">
+                                <span x-text="tgBusy ? 'Sending…' : 'Send Test'"></span>
+                            </button>
+                        </div>
+                        <p class="text-[10px] text-gray-500 mt-2 italic">Create a bot with @BotFather on Telegram and paste its token here. A stored token is shown only as "set".</p>
+                    </div>
+                    <div class="md:col-span-2">
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="block text-gray-400 text-xs sm:text-sm uppercase font-bold tracking-wider">Subscribers <span class="text-gray-500 normal-case font-normal" x-text="'(' + tgSubs.length + ')'"></span></label>
+                            <button type="button" @click="loadSubscribers" :disabled="tgSubsBusy"
+                                    class="bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white font-bold py-1.5 px-3 rounded-lg transition text-xs">
+                                <span x-text="tgSubsBusy ? 'Refreshing…' : 'Refresh'"></span>
+                            </button>
+                        </div>
+                        <div class="space-y-2">
+                            <template x-for="s in tgSubs" :key="s.chat_id">
+                                <div class="flex items-center gap-2 bg-gray-700/60 rounded-lg p-2.5">
+                                    <div class="flex-1 min-w-0">
+                                        <p class="text-sm text-white truncate" x-text="s.name || ('Chat ' + s.chat_id)"></p>
+                                        <p class="text-[10px] text-gray-400 font-mono" x-text="s.chat_id + (s.type ? ' · ' + s.type : '')"></p>
+                                    </div>
+                                    <button type="button" @click="removeSubscriber(s.chat_id)"
+                                            class="bg-gray-700 hover:bg-red-600 text-gray-300 hover:text-white font-bold w-9 h-9 rounded-lg transition shrink-0" title="Remove">✕</button>
+                                </div>
+                            </template>
+                            <p x-show="tgSubs.length === 0" class="text-xs text-gray-500 italic py-2">No subscribers yet. Anyone who sends a message to the bot on Telegram is added here automatically.</p>
+                        </div>
+                        <p class="text-[10px] text-gray-500 mt-3 italic">Recipients subscribe <strong>themselves</strong> — no chat IDs to copy. Each person opens the bot on Telegram and sends <code>/start</code> (or any message); they're added above and receive every withdrawal alert. To add a <strong>group</strong>, add the bot to it and send a message; for a <strong>channel</strong>, add the bot as admin and post once.</p>
+                        <p class="text-[10px] text-gray-500 mt-1 italic">Users can leave anytime by sending <code>/stop</code> to the bot, or you can remove them here with ✕.</p>
+                        <p x-show="tgResult" x-transition class="text-xs mt-2 font-mono" :class="tgOk ? 'text-green-400' : 'text-red-400'" x-text="tgResult"></p>
+                    </div>
+                </div>
+                <p class="text-[10px] text-gray-500 mt-3 italic">A message is broadcast to every subscriber each time an auto-withdrawal completes, with the time and amount.</p>
             </div>
 
             <!-- Secrets -->
@@ -196,9 +291,11 @@
                     private_key: '',
                     polymarket: { series_id: '' },
                     trading: { symbol: '', risk_type: 'percent', risk_value: 10 },
-                    ev: { ev_threshold: 0.04, min_prob: 0.55, min_book_liquidity_usd: 20.0 },
+                    ev: { ev_threshold: 0.04, min_prob: 0.55, min_book_liquidity_usd: 20.0, min_seconds_left: 30 },
                     live: { relayer_api_key: '', alchemy_api_key: '', max_slippage: 0.02 },
-                    flip: { enabled: false, min_conviction: 0.80, min_minutes_left: 9.0 }
+                    flip: { enabled: false, min_conviction: 0.80, min_minutes_left: 9.0 },
+                    capital_extractor: { enabled: false, trigger_balance: 2000, withdraw_amount: 1000, withdraw_address: '', auto_resume_after_withdrawal: true, resume_after: 'submitted' },
+                    telegram: { enabled: false, bot_token: '' }
                 },
                 message: '',
                 messageType: '',
@@ -207,17 +304,64 @@
                 wallets: [],
                 eoa: '',
                 chosenFunder: '',
+                tgBusy: false,
+                tgSubs: [],
+                tgSubsBusy: false,
+                tgResult: '',
+                tgOk: false,
                 async init() {
                     try {
                         const [res, sRes] = await Promise.all([
                             fetch('/api/settings').then(r => r.json()),
                             fetch('/api/available-series').then(r => r.json())
                         ]);
+                        // Merge onto the defaults so a section the server omits still has
+                        // an object behind it — x-model on an undefined branch throws.
+                        for (const k of ['polymarket', 'trading', 'ev', 'live', 'flip',
+                                         'capital_extractor', 'telegram']) {
+                            res[k] = Object.assign({}, this.form[k], res[k] || {});
+                        }
                         this.form = res;
                         this.availableSeries = sRes;
                     } catch (e) {
                         console.error("Failed to load settings", e);
                     }
+                    this.loadSubscribers();
+                },
+                // Telegram: who currently receives withdrawal alerts.
+                async loadSubscribers() {
+                    this.tgSubsBusy = true;
+                    try {
+                        const res = await fetch('/api/telegram-subscribers');
+                        this.tgSubs = (await res.json()).subscribers || [];
+                    } catch (e) { this.tgSubs = []; }
+                    this.tgSubsBusy = false;
+                },
+                async removeSubscriber(chatId) {
+                    try {
+                        await fetch('/api/telegram-unsubscribe', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ chat_id: chatId })
+                        });
+                    } catch (e) { /* the refresh below shows the truth either way */ }
+                    this.loadSubscribers();
+                },
+                async testTelegram() {
+                    this.tgBusy = true; this.tgResult = '';
+                    try {
+                        const res = await fetch('/api/test-telegram', { method: 'POST' });
+                        const data = await res.json();
+                        this.tgOk = !!data.ok;
+                        this.tgResult = data.ok
+                            ? `Test alert sent to ${data.count} subscriber(s).`
+                            : `Failed: ${data.error || 'unknown'}`;
+                    } catch (e) {
+                        this.tgOk = false;
+                        this.tgResult = 'Test request failed.';
+                    }
+                    this.tgBusy = false;
+                    setTimeout(() => this.tgResult = '', 8000);
                 },
                 async saveSettings() {
                     try {
